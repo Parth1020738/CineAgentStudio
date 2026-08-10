@@ -1,0 +1,174 @@
+import React, { useState } from 'react';
+import './App.css';
+
+function App() {
+  const [formData, setFormData] = useState({
+    title: '',
+    genre: '',
+    logline: '',
+    tone: '',
+    targetBudget: ''
+  });
+
+  const [statuses, setStatuses] = useState({
+    adkInitialized: false,
+    geminiConnected: false,
+    storyAgentRunning: false,
+    storyAgentCompleted: false,
+    mcpConnected: false,
+    clickhouseQueryCompleted: false
+  });
+
+  const [storyResult, setStoryResult] = useState(null);
+  const [mcpResult, setMcpResult] = useState(null);
+  const [loading, setLoading] = useState(false);
+
+  const handleInputChange = (e) => {
+    const { name, value } = e.target;
+    setFormData((prev) => ({ ...prev, [name]: value }));
+  };
+
+  const handleTestStoryAgent = async () => {
+    setLoading(true);
+    setStatuses((prev) => ({
+      ...prev,
+      storyAgentRunning: true,
+      storyAgentCompleted: false
+    }));
+
+    try {
+      const response = await fetch('http://localhost:3001/api/story', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(formData)
+      });
+      const resData = await response.json();
+
+      if (response.ok) {
+        setStoryResult(resData.data);
+        setStatuses((prev) => ({
+          ...prev,
+          adkInitialized: true,
+          geminiConnected: true,
+          storyAgentRunning: false,
+          storyAgentCompleted: true
+        }));
+      } else {
+        alert(resData.error || 'Failed to trigger agent.');
+        setStatuses((prev) => ({ ...prev, storyAgentRunning: false }));
+      }
+    } catch (err) {
+      alert('Network error connecting to backend.');
+      setStatuses((prev) => ({ ...prev, storyAgentRunning: false }));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleTestClickHouseMcp = async () => {
+    setStatuses((prev) => ({ ...prev, mcpConnected: false, clickhouseQueryCompleted: false }));
+    try {
+      const response = await fetch('http://localhost:3001/api/mcp/health');
+      const resData = await response.json();
+
+      setMcpResult(resData);
+      if (resData.status === 'connected') {
+        setStatuses((prev) => ({
+          ...prev,
+          mcpConnected: true,
+          clickhouseQueryCompleted: true
+        }));
+      } else {
+        alert(`MCP Test details: ${resData.details?.reason || 'unreachable'}`);
+      }
+    } catch (err) {
+      alert('Network error checking MCP health.');
+    }
+  };
+
+  return (
+    <div className="App">
+      <header className="studio-header">
+        <h1>CineAgent Studio</h1>
+        <p className="subtitle">AI Film Pre-Production Studio Platform</p>
+      </header>
+
+      <div className="container">
+        <section className="form-section">
+          <h2>Film Concept Intake</h2>
+          <div className="form-group">
+            <label>Title</label>
+            <input name="title" value={formData.title} onChange={handleInputChange} placeholder="e.g. Neon Horizon" />
+          </div>
+          <div className="form-group">
+            <label>Genre</label>
+            <input name="genre" value={formData.genre} onChange={handleInputChange} placeholder="e.g. Sci-Fi Cyberpunk" />
+          </div>
+          <div className="form-group">
+            <label>Logline Idea</label>
+            <textarea name="logline" value={formData.logline} onChange={handleInputChange} placeholder="Brief concept idea..." />
+          </div>
+          <div className="form-group">
+            <label>Tone</label>
+            <input name="tone" value={formData.tone} onChange={handleInputChange} placeholder="e.g. Gritty, Neo-noir" />
+          </div>
+          <div className="form-group">
+            <label>Target Budget ($)</label>
+            <input name="targetBudget" value={formData.targetBudget} onChange={handleInputChange} placeholder="e.g. 5000000" />
+          </div>
+
+          <div className="button-group">
+            <button onClick={handleTestStoryAgent} disabled={loading || !formData.title || !formData.genre || !formData.logline}>
+              {loading ? 'Running Agent...' : 'Generate Story'}
+            </button>
+            <button onClick={handleTestClickHouseMcp}>
+              Test ClickHouse MCP
+            </button>
+          </div>
+        </section>
+
+        <section className="status-section">
+          <h2>System Telemetry & Status</h2>
+          <ul className="status-list">
+            <li className={statuses.adkInitialized ? 'status-ok' : 'status-pending'}>
+              {statuses.adkInitialized ? '✓ Google ADK Initialized' : '○ Google ADK Pending'}
+            </li>
+            <li className={statuses.geminiConnected ? 'status-ok' : 'status-pending'}>
+              {statuses.geminiConnected ? '✓ Gemini Connected' : '○ Gemini Connection Pending'}
+            </li>
+            <li className={statuses.storyAgentRunning ? 'status-active' : statuses.storyAgentCompleted ? 'status-ok' : 'status-pending'}>
+              {statuses.storyAgentRunning ? '⚡ Story Agent Generating...' : statuses.storyAgentCompleted ? '✓ Story Agent Completed' : '○ Story Agent Idle'}
+            </li>
+            <li className={statuses.mcpConnected ? 'status-ok' : 'status-pending'}>
+              {statuses.mcpConnected ? '✓ ClickHouse MCP Server Connected' : '○ ClickHouse MCP Pending'}
+            </li>
+            <li className={statuses.clickhouseQueryCompleted ? 'status-ok' : 'status-pending'}>
+              {statuses.clickhouseQueryCompleted ? '✓ ClickHouse Write/Read Tool Executed' : '○ ClickHouse Tool Idle'}
+            </li>
+          </ul>
+
+          {storyResult && (
+            <div className="result-card">
+              <h3>Story Agent Package Output</h3>
+              <p><strong>Logline:</strong> {storyResult.logline}</p>
+              <p><strong>Synopsis:</strong> {storyResult.synopsis}</p>
+              <h4>3-Act Structure</h4>
+              <p><strong>Act I:</strong> {storyResult.three_act_structure?.act1}</p>
+              <p><strong>Act II:</strong> {storyResult.three_act_structure?.act2}</p>
+              <p><strong>Act III:</strong> {storyResult.three_act_structure?.act3}</p>
+            </div>
+          )}
+
+          {mcpResult && (
+            <div className="result-card">
+              <h3>MCP Connection Result</h3>
+              <pre>{JSON.stringify(mcpResult, null, 2)}</pre>
+            </div>
+          )}
+        </section>
+      </div>
+    </div>
+  );
+}
+
+export default App;

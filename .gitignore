@@ -1,0 +1,9 @@
+# Dependency Outputs
+node_modules/
+.env
+.env.local
+.env.production
+dist/
+build/
+.DS_Store
+*.log

@@ -1,0 +1,29 @@
+{
+  "name": "cineagentstudio",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "directories": {
+    "doc": "docs",
+    "test": "tests"
+  },
+  "type": "module",
+  "scripts": {
+    "test": "npx mocha tests/**/*.test.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Parth1020738/CineAgentStudio.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/Parth1020738/CineAgentStudio/issues"
+  },
+  "homepage": "https://github.com/Parth1020738/CineAgentStudio#readme",
+  "dependencies": {
+    "mocha": "^11.8.0",
+    "dotenv": "^17.4.2"
+  }
+}
