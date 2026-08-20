@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import './App.css';
 
 function App() {
@@ -16,12 +16,45 @@ function App() {
     storyAgentRunning: false,
     storyAgentCompleted: false,
     mcpConnected: false,
+    runQueryAvailable: false,
     clickhouseQueryCompleted: false
   });
 
   const [storyResult, setStoryResult] = useState(null);
   const [mcpResult, setMcpResult] = useState(null);
+  const [analyticsResult, setAnalyticsResult] = useState(null);
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    // Perform initial system health checks
+    fetch('http://localhost:3001/api/agent/health')
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.status === 'healthy' || data.details?.googleAdkInitialized) {
+          setStatuses((prev) => ({
+            ...prev,
+            adkInitialized: true,
+            geminiConnected: Boolean(data.details?.geminiConnected)
+          }));
+        }
+      })
+      .catch(() => {});
+
+    fetch('http://localhost:3001/api/mcp/health')
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.status === 'connected') {
+          const tools = data.details?.tools || [];
+          setStatuses((prev) => ({
+            ...prev,
+            mcpConnected: true,
+            runQueryAvailable: tools.includes('run_query')
+          }));
+          setMcpResult(data);
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   const handleInputChange = (e) => {
     const { name, value } = e.target;
@@ -51,7 +84,8 @@ function App() {
           adkInitialized: true,
           geminiConnected: true,
           storyAgentRunning: false,
-          storyAgentCompleted: true
+          storyAgentCompleted: true,
+          clickhouseQueryCompleted: Boolean(resData.data?.telemetry?.mcpLogged)
         }));
       } else {
         alert(resData.error || 'Failed to trigger agent.');
@@ -66,23 +100,39 @@ function App() {
   };
 
   const handleTestClickHouseMcp = async () => {
-    setStatuses((prev) => ({ ...prev, mcpConnected: false, clickhouseQueryCompleted: false }));
+    setStatuses((prev) => ({ ...prev, mcpConnected: false, runQueryAvailable: false, clickhouseQueryCompleted: false }));
     try {
       const response = await fetch('http://localhost:3001/api/mcp/health');
       const resData = await response.json();
 
       setMcpResult(resData);
       if (resData.status === 'connected') {
+        const tools = resData.details?.tools || [];
         setStatuses((prev) => ({
           ...prev,
           mcpConnected: true,
+          runQueryAvailable: tools.includes('run_query'),
           clickhouseQueryCompleted: true
         }));
       } else {
-        alert(`MCP Test details: ${resData.details?.reason || 'unreachable'}`);
+        alert(`MCP Test details: ${resData.details?.reason || resData.details?.error || 'unreachable'}`);
       }
     } catch (err) {
       alert('Network error checking MCP health.');
+    }
+  };
+
+  const handleFetchAnalytics = async () => {
+    try {
+      const response = await fetch('http://localhost:3001/api/mcp/analytics');
+      const resData = await response.json();
+      if (response.ok) {
+        setAnalyticsResult(resData);
+      } else {
+        alert(resData.error || 'Failed to fetch analytics.');
+      }
+    } catch (err) {
+      alert('Network error fetching analytics.');
     }
   };
 
@@ -90,7 +140,7 @@ function App() {
     <div className="App">
       <header className="studio-header">
         <h1>CineAgent Studio</h1>
-        <p className="subtitle">AI Film Pre-Production Studio Platform</p>
+        <p className="subtitle">AI Film Pre-Production Studio Platform — Phase 2 ClickHouse MCP Runtime</p>
       </header>
 
       <div className="container">
@@ -122,13 +172,16 @@ function App() {
               {loading ? 'Running Agent...' : 'Generate Story'}
             </button>
             <button onClick={handleTestClickHouseMcp}>
-              Test ClickHouse MCP
+              Verify ClickHouse MCP
+            </button>
+            <button onClick={handleFetchAnalytics}>
+              Fetch MCP Analytics
             </button>
           </div>
         </section>
 
         <section className="status-section">
-          <h2>System Telemetry & Status</h2>
+          <h2>System Telemetry & Runtime Status</h2>
           <ul className="status-list">
             <li className={statuses.adkInitialized ? 'status-ok' : 'status-pending'}>
               {statuses.adkInitialized ? '✓ Google ADK Initialized' : '○ Google ADK Pending'}
@@ -140,10 +193,13 @@ function App() {
               {statuses.storyAgentRunning ? '⚡ Story Agent Generating...' : statuses.storyAgentCompleted ? '✓ Story Agent Completed' : '○ Story Agent Idle'}
             </li>
             <li className={statuses.mcpConnected ? 'status-ok' : 'status-pending'}>
-              {statuses.mcpConnected ? '✓ ClickHouse MCP Server Connected' : '○ ClickHouse MCP Pending'}
+              {statuses.mcpConnected ? '✓ ClickHouse MCP Server Connected (mcp-clickhouse stdio)' : '○ ClickHouse MCP Pending'}
+            </li>
+            <li className={statuses.runQueryAvailable ? 'status-ok' : 'status-pending'}>
+              {statuses.runQueryAvailable ? '✓ MCP Tool Discovered: run_query' : '○ run_query Tool Pending'}
             </li>
             <li className={statuses.clickhouseQueryCompleted ? 'status-ok' : 'status-pending'}>
-              {statuses.clickhouseQueryCompleted ? '✓ ClickHouse Write/Read Tool Executed' : '○ ClickHouse Tool Idle'}
+              {statuses.clickhouseQueryCompleted ? '✓ ClickHouse Cloud Query Executed via MCP' : '○ ClickHouse Query Idle'}
             </li>
           </ul>
 
@@ -156,13 +212,27 @@ function App() {
               <p><strong>Act I:</strong> {storyResult.three_act_structure?.act1}</p>
               <p><strong>Act II:</strong> {storyResult.three_act_structure?.act2}</p>
               <p><strong>Act III:</strong> {storyResult.three_act_structure?.act3}</p>
+              {storyResult.telemetry && (
+                <div className="telemetry-box">
+                  <p><small><strong>Run ID:</strong> {storyResult.telemetry.runId}</small></p>
+                  <p><small><strong>Duration:</strong> {storyResult.telemetry.durationMs}ms</small></p>
+                  <p><small><strong>ClickHouse MCP Logged:</strong> {storyResult.telemetry.mcpLogged ? 'Yes' : 'No'}</small></p>
+                </div>
+              )}
             </div>
           )}
 
           {mcpResult && (
             <div className="result-card">
-              <h3>MCP Connection Result</h3>
+              <h3>MCP Connection & Tool Discovery Result</h3>
               <pre>{JSON.stringify(mcpResult, null, 2)}</pre>
+            </div>
+          )}
+
+          {analyticsResult && (
+            <div className="result-card">
+              <h3>ClickHouse Cloud Agent Run Analytics (via MCP run_query)</h3>
+              <pre>{JSON.stringify(analyticsResult, null, 2)}</pre>
             </div>
           )}
         </section>

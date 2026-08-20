@@ -1,12 +1,12 @@
 import assert from 'assert';
 import dotenv from 'dotenv';
 import { StoryOutputSchema } from '../server/agents/storyAgent.js';
+import { validateClickHouseConfig } from '../server/mcp/clickhouseMcp.js';
 
 dotenv.config();
 
-describe('CineAgent Studio - Phase 1 Unit Tests', () => {
+describe('CineAgent Studio - Unit Tests', () => {
   it('should validate local environment structure checks', () => {
-    // Assert structure variables are present
     assert.strictEqual(typeof process.env.PORT, 'string', 'PORT should be configured.');
   });
 
@@ -30,5 +30,24 @@ describe('CineAgent Studio - Phase 1 Unit Tests', () => {
 
     const parsed = StoryOutputSchema.safeParse(validData);
     assert.strictEqual(parsed.success, true, 'Schema validation should succeed.');
+  });
+
+  it('should validate ClickHouse configuration validation logic', () => {
+    const origHost = process.env.CLICKHOUSE_HOST;
+    const origPass = process.env.CLICKHOUSE_PASSWORD;
+
+    delete process.env.CLICKHOUSE_HOST;
+    delete process.env.CLICKHOUSE_PASSWORD;
+    assert.strictEqual(validateClickHouseConfig(), false, 'Should return false when variables are missing.');
+
+    process.env.CLICKHOUSE_HOST = 'test.host.clickhouse.cloud';
+    process.env.CLICKHOUSE_PASSWORD = 'test_password';
+    assert.strictEqual(validateClickHouseConfig(), true, 'Should return true when variables are set.');
+
+    if (origHost) process.env.CLICKHOUSE_HOST = origHost;
+    else delete process.env.CLICKHOUSE_HOST;
+
+    if (origPass) process.env.CLICKHOUSE_PASSWORD = origPass;
+    else delete process.env.CLICKHOUSE_PASSWORD;
   });
 });

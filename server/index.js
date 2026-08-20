@@ -1,8 +1,16 @@
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
-import { runStoryAgent } from './agents/storyAgent.js';
-import { startClickHouseMcp, stopClickHouseMcp } from './mcp/clickhouseMcp.js';
+import { runStoryAgent, runAdkWithClickHouseMcp } from './agents/storyAgent.js';
+import {
+  initMcpClient,
+  listMcpTools,
+  validateClickHouseConfig,
+  getAgentRunAnalytics,
+  ensureCineAgentSchema,
+  executeMcpQuery,
+  stopMcpClient
+} from './mcp/clickhouseMcp.js';
 
 dotenv.config();
 
@@ -48,26 +56,25 @@ app.post('/api/story', async (req, res) => {
 
 // MCP Connection checks
 app.get('/api/mcp/health', async (req, res) => {
-  const hasHost = !!process.env.CLICKHOUSE_HOST;
-  const hasPass = !!process.env.CLICKHOUSE_PASSWORD;
-
-  if (!hasHost || !hasPass) {
+  if (!validateClickHouseConfig()) {
     return res.json({
       status: 'disconnected',
       details: {
         mcpServerRunning: false,
-        reason: 'Credentials missing in environment'
+        reason: 'Credentials missing in environment (CLICKHOUSE_HOST and CLICKHOUSE_PASSWORD required)'
       }
     });
   }
 
   try {
-    await startClickHouseMcp();
+    const initResult = await initMcpClient();
     res.json({
       status: 'connected',
       details: {
         mcpServerRunning: true,
-        transport: 'stdio'
+        transport: 'stdio',
+        serverPackage: 'mcp-clickhouse (Python PyPI)',
+        tools: initResult.tools
       }
     });
   } catch (err) {
@@ -81,12 +88,54 @@ app.get('/api/mcp/health', async (req, res) => {
   }
 });
 
+// MCP Analytics endpoint
+app.get('/api/mcp/analytics', async (req, res) => {
+  if (!validateClickHouseConfig()) {
+    return res.status(400).json({ error: 'ClickHouse configuration missing in environment.' });
+  }
+
+  try {
+    await ensureCineAgentSchema();
+    const projectId = req.query.projectId || '';
+    const analytics = await getAgentRunAnalytics(projectId);
+    res.json({
+      status: 'success',
+      source: 'mcp-clickhouse (run_query)',
+      analytics: analytics.result,
+      durationMs: analytics.durationMs
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to query analytics via MCP.', details: err.message });
+  }
+});
+
+// Google ADK -> MCP interaction test endpoint
+app.post('/api/adk-mcp-test', async (req, res) => {
+  if (!validateClickHouseConfig()) {
+    return res.status(400).json({ error: 'ClickHouse configuration missing in environment.' });
+  }
+
+  try {
+    const projectId = req.body.projectId || 'test_project';
+    await ensureCineAgentSchema();
+    const adkMcpResult = await runAdkWithClickHouseMcp(projectId);
+    res.json({ status: 'success', data: adkMcpResult });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed ADK -> MCP interaction test.', details: err.message });
+  }
+});
+
 // Start Express gateway listener
 const server = app.listen(PORT, () => {
   console.log(`CineAgent Studio backend server running on port ${PORT}`);
 });
 
-process.on('SIGTERM', () => {
-  stopClickHouseMcp();
+process.on('SIGTERM', async () => {
+  await stopMcpClient();
+  server.close();
+});
+
+process.on('SIGINT', async () => {
+  await stopMcpClient();
   server.close();
 });

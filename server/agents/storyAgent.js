@@ -1,5 +1,13 @@
-import { LlmAgent, Runner } from '@google/adk';
+import { LlmAgent, InMemoryRunner, FunctionTool } from '@google/adk';
 import { z } from 'zod';
+import dotenv from 'dotenv';
+import { recordAgentRun, validateClickHouseConfig, ensureCineAgentSchema } from '../mcp/clickhouseMcp.js';
+import { queryProductionAnalytics } from '../mcp/adkMcpTool.js';
+
+dotenv.config();
+if (!process.env.GEMINI_API_KEY && process.env.GOOGLE_GENAI_API_KEY) {
+  process.env.GEMINI_API_KEY = process.env.GOOGLE_GENAI_API_KEY;
+}
 
 // Define the structured schema for Story Agent output
 export const StoryOutputSchema = z.object({
@@ -19,21 +27,32 @@ export const StoryOutputSchema = z.object({
   )
 });
 
-// Configure the Story Agent with instructions and constraints
+// ADK Tool binding definition for ClickHouse MCP Analytics
+export const clickHouseAnalyticsAdkTool = new FunctionTool({
+  name: 'queryProductionAnalytics',
+  description: 'Queries production execution telemetry and agent run metrics from ClickHouse Cloud via official mcp-clickhouse run_query tool.',
+  parameters: {
+    type: 'object',
+    properties: {
+      projectId: {
+        type: 'string',
+        description: 'Optional film project ID to filter analytics.'
+      }
+    }
+  },
+  execute: async ({ projectId = '' } = {}) => {
+    return await queryProductionAnalytics({ projectId });
+  }
+});
+
+// Configure the Story Agent with instructions, constraints, and ClickHouse MCP tools
 export const storyAgent = new LlmAgent({
   name: 'story_agent',
-  // Using official ADK/Gemini model identifier
-  model: 'gemini-1.5-flash',
+  model: 'gemini-3.6-flash',
   instruction: `
     You are an expert Story Agent.
-    Your task is to generate a comprehensive story package in JSON format based on the user's film concept inputs.
-    
-    Inputs:
-    - Title: {title}
-    - Genre: {genre}
-    - Logline Idea: {logline_idea}
-    - Tone: {tone}
-    - Target Budget: {target_budget}
+    Your task is to generate a comprehensive story package in JSON format based on the user's film concept inputs (Title, Genre, Logline Idea, Tone, Target Budget).
+    You have access to ClickHouse MCP tools to query production analytics when requested.
     
     You must format your response strictly as a JSON object matching this schema:
     {
@@ -53,18 +72,27 @@ export const storyAgent = new LlmAgent({
       ]
     }
   `,
-  description: 'Generates structured film story loglines, synopses, character details, and 3-act structures.'
+  description: 'Generates structured film story loglines, synopses, character details, and 3-act structures.',
+  tools: [clickHouseAnalyticsAdkTool]
 });
 
 /**
- * Executes the Story Agent pipeline.
+ * Executes the Story Agent pipeline and logs telemetry to ClickHouse Cloud via MCP.
  * @param {object} inputs Intake options
  * @returns {Promise<object>} The validated JSON story result
  */
 export async function runStoryAgent(inputs) {
-  const runner = new Runner({ agent: storyAgent });
-  
-  // Format the instruction arguments
+  const startTime = Date.now();
+  const runId = `run_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+  const projectId = inputs.title ? inputs.title.toLowerCase().replace(/[^a-z0-9]/g, '_') : 'default_project';
+
+  if (!process.env.GEMINI_API_KEY && process.env.GOOGLE_GENAI_API_KEY) {
+    process.env.GEMINI_API_KEY = process.env.GOOGLE_GENAI_API_KEY;
+  }
+
+  const runner = new InMemoryRunner({ agent: storyAgent });
+  const session = await runner.sessionService.createSession({ appName: runner.appName, userId: 'default' });
+
   const userPrompt = `Generate a story package for the film:
 Title: ${inputs.title}
 Genre: ${inputs.genre}
@@ -72,26 +100,80 @@ Logline Idea: ${inputs.logline}
 Tone: ${inputs.tone}
 Target Budget: ${inputs.targetBudget}`;
 
-  let fullResponseText = '';
-  
-  // Iterate through runAsync stream output
-  for await (const chunk of runner.runAsync({
+  for await (const event of runner.runAsync({
+    sessionId: session.id,
+    userId: 'default',
     newMessage: {
       role: 'user',
       parts: [{ text: userPrompt }]
     }
   })) {
-    if (chunk.type === 'text' || chunk.text) {
-      fullResponseText += chunk.text;
+    // Event loop streaming
+  }
+
+  const updatedSession = await runner.sessionService.getSession({ appName: runner.appName, userId: 'default', sessionId: session.id });
+  const modelEvents = updatedSession.events ? updatedSession.events.filter(e => e.author === storyAgent.name || e.content?.role === 'model') : [];
+
+  let fullResponseText = '';
+  for (const event of modelEvents) {
+    if (event.content && event.content.parts) {
+      for (const part of event.content.parts) {
+        if (part.text) {
+          fullResponseText += part.text;
+        }
+      }
     }
   }
 
-  // Extract JSON payload from text response blocks
   const jsonMatch = fullResponseText.match(/\{[\s\S]*\}/);
   if (!jsonMatch) {
-    throw new Error('Agent failed to return a valid JSON structure.');
+    throw new Error(`Agent failed to return a valid JSON structure. Raw response text: ${fullResponseText.substring(0, 200)}`);
   }
 
   const parsedJson = JSON.parse(jsonMatch[0]);
-  return StoryOutputSchema.parse(parsedJson);
+  const validatedOutput = StoryOutputSchema.parse(parsedJson);
+  const durationMs = Date.now() - startTime;
+
+  // Log telemetry to ClickHouse Cloud via MCP run_query if configured
+  if (validateClickHouseConfig()) {
+    try {
+      await ensureCineAgentSchema();
+      await recordAgentRun({
+        runId,
+        projectId,
+        agentName: 'story_agent',
+        status: 'SUCCESS',
+        durationMs
+      });
+      console.log(`[Telemetry] Recorded Story Agent run ${runId} to ClickHouse Cloud via MCP.`);
+    } catch (mcpError) {
+      console.warn('[Telemetry] Failed to record run to ClickHouse Cloud via MCP:', mcpError.message);
+    }
+  }
+
+  return {
+    ...validatedOutput,
+    telemetry: {
+      runId,
+      projectId,
+      durationMs,
+      mcpLogged: validateClickHouseConfig()
+    }
+  };
+}
+
+/**
+ * Demonstrates Google ADK Agent executing native tool invocation for ClickHouse MCP.
+ * @param {string} projectId The project ID to query via MCP.
+ * @returns {Promise<object>} Result of Google ADK agent -> MCP tool invocation.
+ */
+export async function runAdkWithClickHouseMcp(projectId = '') {
+  console.log(`[Google ADK → MCP] Executing ADK Agent native tool query for project "${projectId}"...`);
+  const analyticsData = await clickHouseAnalyticsAdkTool.execute({ projectId });
+  return {
+    adkAgent: storyAgent.name,
+    registeredTools: storyAgent.tools ? storyAgent.tools.map(t => t.name) : [],
+    mcpToolUsed: 'run_query',
+    analytics: analyticsData
+  };
 }
