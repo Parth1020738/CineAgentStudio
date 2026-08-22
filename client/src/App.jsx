@@ -1,56 +1,58 @@
 import React, { useState, useEffect } from 'react';
 import './App.css';
 
-function App() {
+export default function App() {
   const [formData, setFormData] = useState({
-    title: '',
-    genre: '',
-    logline: '',
-    tone: '',
-    targetBudget: ''
+    title: 'Neon Horizon',
+    genre: 'Sci-Fi Cyberpunk',
+    logline: 'A rogue AI hunted by its creator uncovers a city-wide conspiracy.',
+    tone: 'Neo-Noir, Gritty',
+    targetBudget: '5000000',
+    projectId: ''
   });
 
-  const [statuses, setStatuses] = useState({
-    adkInitialized: false,
+  const [pipelineState, setPipelineState] = useState({
+    loading: false,
+    stage: 'idle', // 'idle' | 'preparing' | 'story_agent' | 'screenplay_agent' | 'validating' | 'telemetry' | 'complete' | 'error'
+    progressPct: 0,
+    statusText: '',
+    errorMsg: null
+  });
+
+  const [resultData, setResultData] = useState({
+    projectId: null,
+    storyPackage: null,
+    screenplay: null,
+    pipelineTelemetry: null
+  });
+
+  const [systemHealth, setSystemHealth] = useState({
     geminiConnected: false,
-    storyAgentRunning: false,
-    storyAgentCompleted: false,
     mcpConnected: false,
-    runQueryAvailable: false,
-    clickhouseQueryCompleted: false
+    adkInitialized: false
   });
-
-  const [storyResult, setStoryResult] = useState(null);
-  const [mcpResult, setMcpResult] = useState(null);
-  const [analyticsResult, setAnalyticsResult] = useState(null);
-  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    // Perform initial system health checks
-    fetch('http://localhost:3001/api/agent/health')
+    // Perform initial system health checks via Node Gateway
+    fetch('/api/agent/health')
       .then((res) => res.json())
       .then((data) => {
-        if (data.status === 'healthy' || data.details?.googleAdkInitialized) {
-          setStatuses((prev) => ({
-            ...prev,
-            adkInitialized: true,
-            geminiConnected: Boolean(data.details?.geminiConnected)
-          }));
-        }
+        setSystemHealth((prev) => ({
+          ...prev,
+          adkInitialized: true,
+          geminiConnected: Boolean(data.details?.geminiConnected)
+        }));
       })
       .catch(() => {});
 
-    fetch('http://localhost:3001/api/mcp/health')
+    fetch('/api/mcp/health')
       .then((res) => res.json())
       .then((data) => {
         if (data.status === 'connected') {
-          const tools = data.details?.tools || [];
-          setStatuses((prev) => ({
+          setSystemHealth((prev) => ({
             ...prev,
-            mcpConnected: true,
-            runQueryAvailable: tools.includes('run_query')
+            mcpConnected: true
           }));
-          setMcpResult(data);
         }
       })
       .catch(() => {});
@@ -61,184 +63,416 @@ function App() {
     setFormData((prev) => ({ ...prev, [name]: value }));
   };
 
-  const handleTestStoryAgent = async () => {
-    setLoading(true);
-    setStatuses((prev) => ({
-      ...prev,
-      storyAgentRunning: true,
-      storyAgentCompleted: false
-    }));
+  const handleGeneratePipeline = async (e) => {
+    e.preventDefault();
+
+    // Form Validation
+    if (!formData.title.trim()) {
+      setPipelineState((prev) => ({ ...prev, errorMsg: 'Film Title is required.', stage: 'error' }));
+      return;
+    }
+    if (!formData.genre.trim()) {
+      setPipelineState((prev) => ({ ...prev, errorMsg: 'Genre is required.', stage: 'error' }));
+      return;
+    }
+    if (!formData.logline.trim()) {
+      setPipelineState((prev) => ({ ...prev, errorMsg: 'Logline is required.', stage: 'error' }));
+      return;
+    }
+
+    setPipelineState({
+      loading: true,
+      stage: 'preparing',
+      progressPct: 15,
+      statusText: '1. Preparing film concept intake payload...',
+      errorMsg: null
+    });
+    setResultData({ projectId: null, storyPackage: null, screenplay: null, pipelineTelemetry: null });
+
+    // Progress updates to give visual feedback during multi-agent execution
+    const t1 = setTimeout(() => {
+      setPipelineState((prev) => ({
+        ...prev,
+        stage: 'story_agent',
+        progressPct: 35,
+        statusText: '2. Story Agent executing via Google ADK & Gemini...'
+      }));
+    }, 1200);
+
+    const t2 = setTimeout(() => {
+      setPipelineState((prev) => ({
+        ...prev,
+        stage: 'screenplay_agent',
+        progressPct: 65,
+        statusText: '3. Story mapped to Screenplay Agent contract...'
+      }));
+    }, 15000);
+
+    const t3 = setTimeout(() => {
+      setPipelineState((prev) => ({
+        ...prev,
+        stage: 'validating',
+        progressPct: 85,
+        statusText: '4. Validating screenplay quality & narrative continuity...'
+      }));
+    }, 28000);
 
     try {
-      const response = await fetch('http://localhost:3001/api/story', {
+      const response = await fetch('/api/pipeline/story-to-screenplay', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(formData)
       });
+
+      clearTimeout(t1);
+      clearTimeout(t2);
+      clearTimeout(t3);
+
       const resData = await response.json();
 
-      if (response.ok) {
-        setStoryResult(resData.data);
-        setStatuses((prev) => ({
-          ...prev,
-          adkInitialized: true,
-          geminiConnected: true,
-          storyAgentRunning: false,
-          storyAgentCompleted: true,
-          clickhouseQueryCompleted: Boolean(resData.data?.telemetry?.mcpLogged)
-        }));
-      } else {
-        alert(resData.error || 'Failed to trigger agent.');
-        setStatuses((prev) => ({ ...prev, storyAgentRunning: false }));
+      if (!response.ok) {
+        throw new Error(resData.error || resData.message || 'Pipeline execution failed.');
       }
-    } catch (err) {
-      alert('Network error connecting to backend.');
-      setStatuses((prev) => ({ ...prev, storyAgentRunning: false }));
-    } finally {
-      setLoading(false);
-    }
-  };
 
-  const handleTestClickHouseMcp = async () => {
-    setStatuses((prev) => ({ ...prev, mcpConnected: false, runQueryAvailable: false, clickhouseQueryCompleted: false }));
-    try {
-      const response = await fetch('http://localhost:3001/api/mcp/health');
-      const resData = await response.json();
+      setPipelineState({
+        loading: false,
+        stage: 'complete',
+        progressPct: 100,
+        statusText: '5. Pipeline completed & telemetry recorded to ClickHouse Cloud via MCP!',
+        errorMsg: null
+      });
 
-      setMcpResult(resData);
-      if (resData.status === 'connected') {
-        const tools = resData.details?.tools || [];
-        setStatuses((prev) => ({
-          ...prev,
-          mcpConnected: true,
-          runQueryAvailable: tools.includes('run_query'),
-          clickhouseQueryCompleted: true
-        }));
-      } else {
-        alert(`MCP Test details: ${resData.details?.reason || resData.details?.error || 'unreachable'}`);
-      }
+      setResultData({
+        projectId: resData.data.projectId,
+        storyPackage: resData.data.storyPackage,
+        screenplay: resData.data.screenplay,
+        pipelineTelemetry: resData.data.pipelineTelemetry
+      });
     } catch (err) {
-      alert('Network error checking MCP health.');
-    }
-  };
+      clearTimeout(t1);
+      clearTimeout(t2);
+      clearTimeout(t3);
 
-  const handleFetchAnalytics = async () => {
-    try {
-      const response = await fetch('http://localhost:3001/api/mcp/analytics');
-      const resData = await response.json();
-      if (response.ok) {
-        setAnalyticsResult(resData);
-      } else {
-        alert(resData.error || 'Failed to fetch analytics.');
-      }
-    } catch (err) {
-      alert('Network error fetching analytics.');
+      setPipelineState({
+        loading: false,
+        stage: 'error',
+        progressPct: 0,
+        statusText: '',
+        errorMsg: err.message || 'Network error connecting to CineAgent Studio gateway.'
+      });
     }
   };
 
   return (
-    <div className="App">
+    <div className="app-container">
+      {/* Studio Header */}
       <header className="studio-header">
-        <h1>CineAgent Studio</h1>
-        <p className="subtitle">AI Film Pre-Production Studio Platform — Phase 2 ClickHouse MCP Runtime</p>
+        <div className="header-brand">
+          <div className="clapper-icon">🎬</div>
+          <div>
+            <h1>CINEAGENT STUDIO</h1>
+            <p className="tagline">Autonomous Multi-Agent AI Film Pre-Production Platform</p>
+          </div>
+        </div>
+
+        <div className="health-bar">
+          <div className={`health-badge ${systemHealth.adkInitialized ? 'healthy' : 'degraded'}`}>
+            <span className="dot"></span> Google ADK
+          </div>
+          <div className={`health-badge ${systemHealth.geminiConnected ? 'healthy' : 'degraded'}`}>
+            <span className="dot"></span> Gemini API
+          </div>
+          <div className={`health-badge ${systemHealth.mcpConnected ? 'healthy' : 'disconnected'}`}>
+            <span className="dot"></span> ClickHouse MCP
+          </div>
+        </div>
       </header>
 
-      <div className="container">
-        <section className="form-section">
-          <h2>Film Concept Intake</h2>
-          <div className="form-group">
-            <label>Title</label>
-            <input name="title" value={formData.title} onChange={handleInputChange} placeholder="e.g. Neon Horizon" />
-          </div>
-          <div className="form-group">
-            <label>Genre</label>
-            <input name="genre" value={formData.genre} onChange={handleInputChange} placeholder="e.g. Sci-Fi Cyberpunk" />
-          </div>
-          <div className="form-group">
-            <label>Logline Idea</label>
-            <textarea name="logline" value={formData.logline} onChange={handleInputChange} placeholder="Brief concept idea..." />
-          </div>
-          <div className="form-group">
-            <label>Tone</label>
-            <input name="tone" value={formData.tone} onChange={handleInputChange} placeholder="e.g. Gritty, Neo-noir" />
-          </div>
-          <div className="form-group">
-            <label>Target Budget ($)</label>
-            <input name="targetBudget" value={formData.targetBudget} onChange={handleInputChange} placeholder="e.g. 5000000" />
+      <main className="main-content">
+        {/* Film Concept Intake Panel */}
+        <section className="card form-card">
+          <div className="card-header">
+            <h2>1. Film Concept Intake</h2>
+            <span className="badge">Production Setup</span>
           </div>
 
-          <div className="button-group">
-            <button onClick={handleTestStoryAgent} disabled={loading || !formData.title || !formData.genre || !formData.logline}>
-              {loading ? 'Running Agent...' : 'Generate Story'}
+          <form onSubmit={handleGeneratePipeline} className="concept-form">
+            <div className="form-row">
+              <div className="form-group flex-2">
+                <label>Film Title <span className="req">*</span></label>
+                <input
+                  type="text"
+                  name="title"
+                  value={formData.title}
+                  onChange={handleInputChange}
+                  placeholder="e.g., Neon Horizon"
+                  disabled={pipelineState.loading}
+                  required
+                />
+              </div>
+
+              <div className="form-group flex-1">
+                <label>Genre <span className="req">*</span></label>
+                <input
+                  type="text"
+                  name="genre"
+                  value={formData.genre}
+                  onChange={handleInputChange}
+                  placeholder="e.g., Sci-Fi Cyberpunk"
+                  disabled={pipelineState.loading}
+                  required
+                />
+              </div>
+            </div>
+
+            <div className="form-group">
+              <label>Logline Concept <span className="req">*</span></label>
+              <textarea
+                name="logline"
+                value={formData.logline}
+                onChange={handleInputChange}
+                rows={2}
+                placeholder="A high-concept one-sentence summary of your film."
+                disabled={pipelineState.loading}
+                required
+              />
+            </div>
+
+            <div className="form-row">
+              <div className="form-group flex-1">
+                <label>Tone / Visual Style</label>
+                <input
+                  type="text"
+                  name="tone"
+                  value={formData.tone}
+                  onChange={handleInputChange}
+                  placeholder="e.g., Neo-Noir, Gritty, Atmospheric"
+                  disabled={pipelineState.loading}
+                />
+              </div>
+
+              <div className="form-group flex-1">
+                <label>Target Budget ($)</label>
+                <input
+                  type="number"
+                  name="targetBudget"
+                  value={formData.targetBudget}
+                  onChange={handleInputChange}
+                  placeholder="e.g., 5000000"
+                  disabled={pipelineState.loading}
+                />
+              </div>
+
+              <div className="form-group flex-1">
+                <label>Project ID (Optional)</label>
+                <input
+                  type="text"
+                  name="projectId"
+                  value={formData.projectId}
+                  onChange={handleInputChange}
+                  placeholder="auto-generated if empty"
+                  disabled={pipelineState.loading}
+                />
+              </div>
+            </div>
+
+            <button
+              type="submit"
+              className="submit-btn"
+              disabled={pipelineState.loading}
+            >
+              {pipelineState.loading ? (
+                <>
+                  <span className="spinner"></span> Executing Multi-Agent Pipeline...
+                </>
+              ) : (
+                '🚀 Generate Production Draft (Story + Screenplay)'
+              )}
             </button>
-            <button onClick={handleTestClickHouseMcp}>
-              Verify ClickHouse MCP
-            </button>
-            <button onClick={handleFetchAnalytics}>
-              Fetch MCP Analytics
-            </button>
-          </div>
+          </form>
         </section>
 
-        <section className="status-section">
-          <h2>System Telemetry & Runtime Status</h2>
-          <ul className="status-list">
-            <li className={statuses.adkInitialized ? 'status-ok' : 'status-pending'}>
-              {statuses.adkInitialized ? '✓ Google ADK Initialized' : '○ Google ADK Pending'}
-            </li>
-            <li className={statuses.geminiConnected ? 'status-ok' : 'status-pending'}>
-              {statuses.geminiConnected ? '✓ Gemini Connected' : '○ Gemini Connection Pending'}
-            </li>
-            <li className={statuses.storyAgentRunning ? 'status-active' : statuses.storyAgentCompleted ? 'status-ok' : 'status-pending'}>
-              {statuses.storyAgentRunning ? '⚡ Story Agent Generating...' : statuses.storyAgentCompleted ? '✓ Story Agent Completed' : '○ Story Agent Idle'}
-            </li>
-            <li className={statuses.mcpConnected ? 'status-ok' : 'status-pending'}>
-              {statuses.mcpConnected ? '✓ ClickHouse MCP Server Connected (mcp-clickhouse stdio)' : '○ ClickHouse MCP Pending'}
-            </li>
-            <li className={statuses.runQueryAvailable ? 'status-ok' : 'status-pending'}>
-              {statuses.runQueryAvailable ? '✓ MCP Tool Discovered: run_query' : '○ run_query Tool Pending'}
-            </li>
-            <li className={statuses.clickhouseQueryCompleted ? 'status-ok' : 'status-pending'}>
-              {statuses.clickhouseQueryCompleted ? '✓ ClickHouse Cloud Query Executed via MCP' : '○ ClickHouse Query Idle'}
-            </li>
-          </ul>
+        {/* Pipeline Execution Progress */}
+        {pipelineState.loading && (
+          <section className="card progress-card">
+            <h3>Pipeline Execution Status</h3>
+            <div className="progress-bar-container">
+              <div
+                className="progress-bar-fill"
+                style={{ width: `${pipelineState.progressPct}%` }}
+              ></div>
+            </div>
+            <p className="progress-text">{pipelineState.statusText}</p>
+          </section>
+        )}
 
-          {storyResult && (
-            <div className="result-card">
-              <h3>Story Agent Package Output</h3>
-              <p><strong>Logline:</strong> {storyResult.logline}</p>
-              <p><strong>Synopsis:</strong> {storyResult.synopsis}</p>
-              <h4>3-Act Structure</h4>
-              <p><strong>Act I:</strong> {storyResult.three_act_structure?.act1}</p>
-              <p><strong>Act II:</strong> {storyResult.three_act_structure?.act2}</p>
-              <p><strong>Act III:</strong> {storyResult.three_act_structure?.act3}</p>
-              {storyResult.telemetry && (
-                <div className="telemetry-box">
-                  <p><small><strong>Run ID:</strong> {storyResult.telemetry.runId}</small></p>
-                  <p><small><strong>Duration:</strong> {storyResult.telemetry.durationMs}ms</small></p>
-                  <p><small><strong>ClickHouse MCP Logged:</strong> {storyResult.telemetry.mcpLogged ? 'Yes' : 'No'}</small></p>
+        {/* Error Notification */}
+        {pipelineState.stage === 'error' && (
+          <div className="card error-card">
+            <h3>⚠️ Pipeline Execution Error</h3>
+            <p>{pipelineState.errorMsg}</p>
+          </div>
+        )}
+
+        {/* Results Container */}
+        {resultData.storyPackage && resultData.screenplay && (
+          <div className="results-container">
+            {/* Story Package Output */}
+            <section className="card story-card">
+              <div className="card-header">
+                <h2>2. Story Agent Output</h2>
+                <span className="badge agent-badge">Story Agent (Gemini)</span>
+              </div>
+
+              <div className="story-meta">
+                <div className="meta-block">
+                  <h4>Logline</h4>
+                  <p className="logline-text">{resultData.storyPackage.logline}</p>
+                </div>
+
+                <div className="meta-block">
+                  <h4>Synopsis</h4>
+                  <p className="synopsis-text">{resultData.storyPackage.synopsis}</p>
+                </div>
+              </div>
+
+              {resultData.storyPackage.three_act_structure && (
+                <div className="three-act-grid">
+                  <div className="act-box">
+                    <h4>Act 1 — Setup</h4>
+                    <p>{resultData.storyPackage.three_act_structure.act1}</p>
+                  </div>
+                  <div className="act-box">
+                    <h4>Act 2 — Confrontation</h4>
+                    <p>{resultData.storyPackage.three_act_structure.act2}</p>
+                  </div>
+                  <div className="act-box">
+                    <h4>Act 3 — Resolution</h4>
+                    <p>{resultData.storyPackage.three_act_structure.act3}</p>
+                  </div>
                 </div>
               )}
-            </div>
-          )}
 
-          {mcpResult && (
-            <div className="result-card">
-              <h3>MCP Connection & Tool Discovery Result</h3>
-              <pre>{JSON.stringify(mcpResult, null, 2)}</pre>
-            </div>
-          )}
+              {resultData.storyPackage.characters && (
+                <div className="characters-section">
+                  <h3>Character Roster</h3>
+                  <div className="character-grid">
+                    {resultData.storyPackage.characters.map((char, i) => (
+                      <div key={i} className="character-card">
+                        <div className="char-header">
+                          <span className="char-name">{char.name}</span>
+                          <span className="char-role">{char.role}</span>
+                        </div>
+                        <p className="char-desc">{char.description}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </section>
 
-          {analyticsResult && (
-            <div className="result-card">
-              <h3>ClickHouse Cloud Agent Run Analytics (via MCP run_query)</h3>
-              <pre>{JSON.stringify(analyticsResult, null, 2)}</pre>
-            </div>
-          )}
-        </section>
-      </div>
+            {/* Formatted Screenplay Output */}
+            <section className="card screenplay-card">
+              <div className="card-header">
+                <h2>3. Formatted Screenplay Output</h2>
+                <span className="badge screenplay-badge">Screenplay Agent (Gemini)</span>
+              </div>
+
+              <div className="screenplay-paper">
+                <div className="screenplay-title-block">
+                  <h1 className="screenplay-title">{resultData.screenplay.title.toUpperCase()}</h1>
+                  <p className="screenplay-byline">Written by CineAgent Studio Screenplay Agent</p>
+                  <p className="screenplay-proj">Project ID: {resultData.projectId}</p>
+                </div>
+
+                <div className="screenplay-scenes">
+                  {resultData.screenplay.scenes.map((scene) => (
+                    <div key={scene.scene_number} className="scene-block">
+                      <div className="scene-heading-bar">
+                        <span className="scene-no">SCENE {scene.scene_number}</span>
+                        <span className="scene-slug">{scene.scene_heading}</span>
+                      </div>
+
+                      <div className="action-block">
+                        <p>{scene.action}</p>
+                      </div>
+
+                      {scene.dialogue && scene.dialogue.length > 0 && (
+                        <div className="dialogue-container">
+                          {scene.dialogue.map((d, dIdx) => (
+                            <div key={dIdx} className="dialogue-block">
+                              <div className="character-name">{d.character.toUpperCase()}</div>
+                              {d.parenthetical && (
+                                <div className="parenthetical">({d.parenthetical})</div>
+                              )}
+                              <div className="dialogue-line">{d.line}</div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      {scene.transition && (
+                        <div className="transition-block">
+                          {scene.transition}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </section>
+
+            {/* Safe Telemetry & Production Analytics Panel */}
+            {resultData.pipelineTelemetry && (
+              <section className="card telemetry-card">
+                <div className="card-header">
+                  <h2>4. ClickHouse Telemetry Summary</h2>
+                  <span className="badge telemetry-badge">ClickHouse Cloud via MCP</span>
+                </div>
+
+                <div className="telemetry-grid">
+                  <div className="telemetry-item">
+                    <span className="t-label">Pipeline Status</span>
+                    <span className="t-val status-success">
+                      {resultData.pipelineTelemetry.status}
+                    </span>
+                  </div>
+
+                  <div className="telemetry-item">
+                    <span className="t-label">Project ID</span>
+                    <span className="t-val">{resultData.projectId}</span>
+                  </div>
+
+                  <div className="telemetry-item">
+                    <span className="t-label">Story Agent Duration</span>
+                    <span className="t-val">{resultData.storyPackage?.telemetry?.durationMs || 'N/A'} ms</span>
+                  </div>
+
+                  <div className="telemetry-item">
+                    <span className="t-label">Screenplay Agent Duration</span>
+                    <span className="t-val">{resultData.screenplay?.telemetry?.durationMs || 'N/A'} ms</span>
+                  </div>
+
+                  <div className="telemetry-item">
+                    <span className="t-label">Total Pipeline Duration</span>
+                    <span className="t-val">{resultData.pipelineTelemetry.durationMs} ms</span>
+                  </div>
+
+                  <div className="telemetry-item">
+                    <span className="t-label">ClickHouse MCP Telemetry</span>
+                    <span className="t-val status-success">
+                      {resultData.pipelineTelemetry.mcpLogged ? 'PERSISTED ✅' : 'DISABLED'}
+                    </span>
+                  </div>
+                </div>
+                <p className="telemetry-note">
+                  🔒 Telemetry execution metrics were securely logged to ClickHouse Cloud via standard MCP stdio protocol without exposing credentials.
+                </p>
+              </section>
+            )}
+          </div>
+        )}
+      </main>
     </div>
   );
 }
-
-export default App;

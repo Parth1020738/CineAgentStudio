@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import { runStoryAgent, runAdkWithClickHouseMcp } from './agents/storyAgent.js';
+import { runStoryToScreenplayPipeline } from './agents/pipeline.js';
 import {
   initMcpClient,
   listMcpTools,
@@ -51,6 +52,48 @@ app.post('/api/story', async (req, res) => {
   } catch (error) {
     console.error('Story Agent generation failed:', error);
     res.status(500).json({ error: 'Failed to generate story package.', details: error.message });
+  }
+});
+
+// Trigger full Multi-Agent Story -> Screenplay Production Pipeline
+app.post('/api/pipeline/story-to-screenplay', async (req, res) => {
+  const { title, genre, logline, tone, targetBudget, projectId } = req.body || {};
+
+  if (!title || typeof title !== 'string' || !title.trim()) {
+    return res.status(400).json({ error: 'Title is required and must be a non-empty string.' });
+  }
+  if (!genre || typeof genre !== 'string' || !genre.trim()) {
+    return res.status(400).json({ error: 'Genre is required and must be a non-empty string.' });
+  }
+  if (!logline || typeof logline !== 'string' || !logline.trim()) {
+    return res.status(400).json({ error: 'Logline is required and must be a non-empty string.' });
+  }
+
+  try {
+    const pipelineResult = await runStoryToScreenplayPipeline({
+      title: title.trim(),
+      genre: genre.trim(),
+      logline: logline.trim(),
+      tone: tone ? String(tone).trim() : 'Cinematic',
+      targetBudget: targetBudget ? String(targetBudget).trim() : '5000000',
+      projectId: projectId ? String(projectId).trim() : undefined
+    });
+
+    res.json({
+      status: 'success',
+      data: {
+        projectId: pipelineResult.storyPackage?.telemetry?.projectId || pipelineResult.screenplay?.project_id || 'default_project',
+        storyPackage: pipelineResult.storyPackage,
+        screenplay: pipelineResult.screenplay,
+        pipelineTelemetry: pipelineResult.pipelineTelemetry
+      }
+    });
+  } catch (error) {
+    console.error('[Pipeline Endpoint Error]:', error);
+    res.status(500).json({
+      error: 'Multi-Agent Production Pipeline execution failed.',
+      message: error.message || 'An unexpected error occurred during pipeline execution.'
+    });
   }
 });
 
