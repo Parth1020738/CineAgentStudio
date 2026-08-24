@@ -1,12 +1,13 @@
-import { LlmAgent, InMemoryRunner } from '@google/adk';
+import { LlmAgent } from '@google/adk';
 import { z } from 'zod';
 import dotenv from 'dotenv';
 import { recordAgentRun, validateClickHouseConfig, ensureCineAgentSchema } from '../mcp/clickhouseMcp.js';
+import { getGeminiModel, executeAgentWithPolicy, extractJsonFromText, is429RateLimitError } from '../config/geminiConfig.js';
 
 dotenv.config();
-if (!process.env.GEMINI_API_KEY && process.env.GOOGLE_GENAI_API_KEY) {
-  process.env.GEMINI_API_KEY = process.env.GOOGLE_GENAI_API_KEY;
-}
+
+// Export helper utilities for tests / backwards compatibility
+export { extractJsonFromText, is429RateLimitError };
 
 // Input Schema for Screenplay Agent accepting structured Story Agent output
 export const ScreenplayInputSchema = z.object({
@@ -60,7 +61,6 @@ export const ScreenplayOutputSchema = z.object({
   const sceneNumbers = data.scenes.map(s => s.scene_number);
   const uniqueNumbers = new Set(sceneNumbers);
 
-  // Validate scene number uniqueness
   if (uniqueNumbers.size !== sceneNumbers.length) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
@@ -69,7 +69,6 @@ export const ScreenplayOutputSchema = z.object({
     });
   }
 
-  // Validate sequential 1-based scene numbering
   for (let i = 0; i < data.scenes.length; i++) {
     if (data.scenes[i].scene_number !== i + 1) {
       ctx.addIssue({
@@ -81,26 +80,90 @@ export const ScreenplayOutputSchema = z.object({
   }
 });
 
-// Configure Google ADK Screenplay Agent
+/**
+ * Deterministic normalizer for Screenplay Agent payloads.
+ * Maps unambiguous field aliases without fabricating content.
+ * @param {object} rawJson Raw JSON object
+ * @param {object} validatedInputs Validated input story fields
+ * @returns {object} Normalized object ready for ScreenplayOutputSchema validation
+ */
+export function normalizeScreenplayPayload(rawJson, validatedInputs = {}) {
+  if (!rawJson || typeof rawJson !== 'object') {
+    throw new Error('Screenplay Agent output must be a valid JSON object.');
+  }
+
+  const normalized = {};
+
+  normalized.project_id = (validatedInputs.projectId || rawJson.project_id || (validatedInputs.title ? validatedInputs.title.toLowerCase().replace(/[^a-z0-9]/g, '_') : 'default_project')).trim();
+  normalized.title = (validatedInputs.title || rawJson.title || 'Untitled Screenplay').trim();
+
+  const rawScenes = Array.isArray(rawJson.scenes) ? rawJson.scenes : [];
+  if (rawScenes.length === 0) {
+    throw new Error('Screenplay must contain a non-empty scenes array.');
+  }
+
+  const slicedScenes = rawScenes.slice(0, 3);
+
+  normalized.scenes = slicedScenes.map((s, idx) => {
+    const scene_number = idx + 1;
+
+    let scene_heading = (s?.scene_heading || s?.heading || s?.slugline || `INT. SCENE ${scene_number} - DAY`).trim();
+    if (!/^(INT|EXT|INT\.\/EXT)\./i.test(scene_heading)) {
+      if (/^INT\b/i.test(scene_heading)) {
+        scene_heading = scene_heading.replace(/^INT\s*/i, 'INT. ');
+      } else if (/^EXT\b/i.test(scene_heading)) {
+        scene_heading = scene_heading.replace(/^EXT\s*/i, 'EXT. ');
+      } else if (/^INTERIOR\b/i.test(scene_heading)) {
+        scene_heading = scene_heading.replace(/^INTERIOR\s*/i, 'INT. ');
+      } else if (/^EXTERIOR\b/i.test(scene_heading)) {
+        scene_heading = scene_heading.replace(/^EXTERIOR\s*/i, 'EXT. ');
+      } else {
+        scene_heading = `INT. ${scene_heading}`;
+      }
+    }
+
+    const location = (s?.location || s?.setting || scene_heading.replace(/^(INT|EXT|INT\.\/EXT)\.\s*/i, '').split('-')[0] || `Location ${scene_number}`).trim();
+    const time = (s?.time || s?.time_of_day || (scene_heading.includes('-') ? scene_heading.split('-').pop() : 'DAY') || 'DAY').trim();
+    const action = (s?.action || s?.description || s?.action_block || s?.visual || `Action description for scene ${scene_number}.`).trim();
+
+    const rawDialogue = Array.isArray(s?.dialogue) ? s.dialogue : (Array.isArray(s?.lines) ? s.lines : []);
+    const dialogue = rawDialogue.map((d, dIdx) => {
+      const character = (d?.character || d?.speaker || d?.name || (validatedInputs.characters?.[0]?.name || `CHARACTER ${dIdx + 1}`)).trim();
+      const line = (d?.line || d?.dialogue || d?.text || '...').trim();
+      const parenthetical = d?.parenthetical ? String(d.parenthetical).trim() : undefined;
+      return {
+        character,
+        line,
+        ...(parenthetical ? { parenthetical } : {})
+      };
+    }).filter(d => d.character.length > 0 && d.line.length > 0);
+
+    const transition = s?.transition ? String(s.transition).trim() : undefined;
+
+    return {
+      scene_number,
+      scene_heading,
+      location,
+      time,
+      action,
+      dialogue,
+      ...(transition ? { transition } : {})
+    };
+  });
+
+  return normalized;
+}
+
+// Configure Google ADK Screenplay Agent with centralized model
 export const screenplayAgent = new LlmAgent({
   name: 'screenplay_agent',
-  model: 'gemini-3.6-flash',
+  model: getGeminiModel(),
   instruction: `
     You are an expert Screenplay Agent for CineAgent Studio.
-    Your task is to transform structured story input (title, logline, synopsis, characters, 3-act structure) into a concise, production-ready screenplay draft containing EXACTLY 2 to 3 key scenes suitable for film production.
+    Your task is to transform structured story input into a concise, production-ready screenplay draft containing EXACTLY 2 to 3 key scenes.
 
-    Strict Quality & Formatting Rules:
-    1. Output MUST be formatted strictly as a single valid JSON object matching the requested schema.
-    2. Scene count MUST be between 2 and 3 scenes (minimum 2, maximum 3).
-    3. Scene numbers MUST be sequential integers starting from 1 (e.g., scene 1, scene 2, scene 3).
-    4. Scene headings MUST strictly start with INT. or EXT. or INT./EXT. (e.g., "INT. WORKSHOP - NIGHT", "EXT. ALLEYWAY - DAY"). Never use generic headings like "Scene 1".
-    5. Location and time fields MUST be non-empty strings corresponding directly to the scene heading.
-    6. Action blocks MUST be present, visual, present-tense, and describe concrete character movements and setting details.
-    7. Dialogue MUST be structured with non-empty "character" and "line" values. Action-only scenes with empty dialogue arrays are permitted where appropriate.
-    8. Maintain 100% character and dialogue consistency with the supplied story characters. Do NOT invent new major characters unless strictly necessary.
-    9. Preserve narrative continuity and tone established in the input story.
-
-    JSON Schema Format:
+    STRICT OUTPUT CONTRACT:
+    Output MUST be a single valid, parseable raw JSON object matching this schema:
     {
       "project_id": "string",
       "title": "string",
@@ -115,7 +178,7 @@ export const screenplayAgent = new LlmAgent({
             {
               "character": "CHARACTER NAME",
               "line": "Spoken line of dialogue.",
-              "parenthetical": "optional emotional cue"
+              "parenthetical": "optional cue"
             }
           ],
           "transition": "CUT TO:"
@@ -130,14 +193,20 @@ export const screenplayAgent = new LlmAgent({
         }
       ]
     }
+
+    Strict Quality & Formatting Rules:
+    1. Output MUST be pure raw JSON ONLY (no markdown backticks, no code fences, no conversational prose).
+    2. Scene count MUST be between 2 and 3 scenes (minimum 2, maximum 3).
+    3. Scene numbers MUST be sequential integers starting from 1 (1, 2, 3).
+    4. Scene headings MUST strictly start with INT. or EXT. or INT./EXT.
+    5. Location and time fields MUST be non-empty strings.
+    6. Action blocks MUST be present and visual.
+    7. Dialogue MUST be structured with non-empty "character" and "line" values.
+    8. Maintain 100% character and dialogue consistency with the supplied story characters.
   `,
   description: 'Transforms structured story packages into formatted, scene-by-scene screenplay drafts.'
 });
 
-/**
- * Helper function to record Screenplay Agent run telemetry to ClickHouse Cloud via MCP.
- * @param {object} params Telemetry fields (runId, projectId, status, durationMs)
- */
 export async function recordScreenplayTelemetry({ runId, projectId, status, durationMs }) {
   if (!validateClickHouseConfig()) return false;
   try {
@@ -157,20 +226,11 @@ export async function recordScreenplayTelemetry({ runId, projectId, status, dura
   }
 }
 
-/**
- * Executes the Screenplay Agent pipeline using Google ADK and Gemini API.
- * @param {object} inputs Intake options matching ScreenplayInputSchema
- * @returns {Promise<object>} The validated JSON screenplay result with telemetry metadata
- */
 export async function runScreenplayAgent(inputs) {
   const startTime = Date.now();
   const runId = `run_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
   const validatedInputs = ScreenplayInputSchema.parse(inputs);
   const projectId = validatedInputs.projectId || (validatedInputs.title ? validatedInputs.title.toLowerCase().replace(/[^a-z0-9]/g, '_') : 'default_project');
-
-  if (!process.env.GEMINI_API_KEY && process.env.GOOGLE_GENAI_API_KEY) {
-    process.env.GEMINI_API_KEY = process.env.GOOGLE_GENAI_API_KEY;
-  }
 
   const charactersFormatted = validatedInputs.characters.map(c => `- ${c.name} (${c.role}): ${c.description}`).join('\n');
   const threeActFormatted = validatedInputs.three_act_structure 
@@ -195,122 +255,43 @@ ${charactersFormatted}
 
 Produce a screenplay JSON object containing project_id, title, and EXACTLY 2 to 3 key scenes.`;
 
-  const maxAttempts = 5;
-  let fullResponseText = '';
-  let lastError = null;
-
+  let parsedPayload;
   try {
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      fullResponseText = '';
-      let lastErrorMessage = '';
-
-      try {
-        const runner = new InMemoryRunner({ agent: screenplayAgent });
-        const session = await runner.sessionService.createSession({ appName: runner.appName, userId: 'default' });
-
-        for await (const event of runner.runAsync({
-          sessionId: session.id,
-          userId: 'default',
-          newMessage: {
-            role: 'user',
-            parts: [{ text: userPrompt }]
-          }
-        })) {
-          if (event.errorMessage) {
-            lastErrorMessage = event.errorMessage;
-          }
-          if (event.content && event.content.parts) {
-            for (const part of event.content.parts) {
-              if (part.text) {
-                fullResponseText += part.text;
-              }
-            }
-          }
-        }
-
-        if (!fullResponseText) {
-          const updatedSession = await runner.sessionService.getSession({ appName: runner.appName, userId: 'default', sessionId: session.id });
-          const modelEvents = updatedSession.events ? updatedSession.events.filter(e => e.author !== 'user' && e.content && e.content.parts) : [];
-          for (const event of modelEvents) {
-            for (const part of event.content.parts) {
-              if (part.text) {
-                fullResponseText += part.text;
-              }
-            }
-          }
-        }
-      } catch (err) {
-        lastError = err;
-        lastErrorMessage = err.message || String(err);
-        console.warn(`[Screenplay Agent] Attempt ${attempt}/${maxAttempts} caught exception: ${lastErrorMessage}`);
+    parsedPayload = await executeAgentWithPolicy({
+      agentName: 'screenplay_agent',
+      agent: screenplayAgent,
+      userPrompt,
+      parseAndValidate: (extracted) => {
+        const normalized = normalizeScreenplayPayload(extracted, validatedInputs);
+        return ScreenplayOutputSchema.parse(normalized);
       }
-
-      if (fullResponseText && fullResponseText.includes('{')) {
-        break; // Valid text received
-      }
-
-      const isRateLimited = lastErrorMessage && (
-        lastErrorMessage.includes('Quota exceeded') ||
-        lastErrorMessage.includes('429') ||
-        lastErrorMessage.includes('RESOURCE_EXHAUSTED')
-      );
-
-      if (attempt < maxAttempts) {
-        const delayMs = isRateLimited ? 15000 : 3000;
-        console.warn(`[Screenplay Agent] Retrying attempt ${attempt + 1}/${maxAttempts} in ${delayMs / 1000}s...`);
-        await new Promise((r) => setTimeout(r, delayMs));
-      }
-    }
-
-    const jsonMatch = fullResponseText ? fullResponseText.match(/\{[\s\S]*\}/) : null;
-    if (!jsonMatch) {
-      if (lastError && (lastError.message.includes('429') || lastError.message.includes('Quota exceeded'))) {
-        throw new Error(`Gemini API rate limit exceeded (429). Please wait 15–30 seconds before retrying.`);
-      }
-      throw new Error(`Screenplay Agent failed to return a valid JSON structure. ${lastError ? lastError.message : ''}`);
-    }
-
-    const parsedJson = JSON.parse(jsonMatch[0]);
-    
-    // Enforce project_id matching if missing or generic
-    if (!parsedJson.project_id) {
-      parsedJson.project_id = projectId;
-    }
-    if (!parsedJson.title) {
-      parsedJson.title = validatedInputs.title;
-    }
-
-    // Validate against Screenplay Output Schema
-    const validatedOutput = ScreenplayOutputSchema.parse(parsedJson);
-    const durationMs = Date.now() - startTime;
-
-    // Log SUCCESS telemetry to ClickHouse Cloud via MCP run_query if configured
-    await recordScreenplayTelemetry({
-      runId,
-      projectId,
-      status: 'SUCCESS',
-      durationMs
     });
-
-    return {
-      ...validatedOutput,
-      telemetry: {
-        runId,
-        projectId,
-        agentName: 'screenplay_agent',
-        durationMs,
-        mcpLogged: validateClickHouseConfig()
-      }
-    };
-  } catch (error) {
+  } catch (err) {
     const durationMs = Date.now() - startTime;
-    // Log FAILED telemetry to ClickHouse Cloud via MCP run_query if configured
     await recordScreenplayTelemetry({
       runId,
       projectId,
       status: 'FAILED',
       durationMs
     });
-    throw error;
+    throw err;
   }
+
+  const durationMs = Date.now() - startTime;
+  await recordScreenplayTelemetry({
+    runId,
+    projectId,
+    status: 'SUCCESS',
+    durationMs
+  });
+
+  return {
+    ...parsedPayload,
+    telemetry: {
+      runId,
+      projectId,
+      agentName: 'screenplay_agent',
+      durationMs
+    }
+  };
 }

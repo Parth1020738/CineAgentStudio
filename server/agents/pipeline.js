@@ -1,5 +1,9 @@
 import { runStoryAgent, StoryOutputSchema } from './storyAgent.js';
 import { runScreenplayAgent, ScreenplayInputSchema } from './screenplayAgent.js';
+import { runBreakdownAgent } from './breakdownAgent.js';
+import { runBudgetAgent } from './budgetAgent.js';
+import { runScheduleAgent, validateScheduleFidelity } from './scheduleAgent.js';
+import { recordProductionAnalytics } from '../services/productionAnalytics.js';
 
 /**
  * Maps structured Story Agent output and concept inputs to valid Screenplay Agent input contract.
@@ -132,6 +136,72 @@ export async function runStoryToScreenplayPipeline(conceptInputs) {
       screenplayDurationMs,
       totalDurationMs,
       status: 'SUCCESS'
+    }
+  };
+}
+
+/**
+ * Executes full production pipeline including Production Breakdown: Story Agent -> Screenplay Agent -> Breakdown Agent.
+ * @param {object} conceptInputs Intake options
+ * @returns {Promise<object>} Complete pipeline container including breakdown
+ */
+export async function runFullProductionPipeline(conceptInputs) {
+  const baseResult = await runStoryToScreenplayPipeline(conceptInputs);
+  
+  console.log(`[Pipeline] Step 5: Executing Production Breakdown Agent for project "${baseResult.screenplay.project_id}"...`);
+  const breakdownStartTime = Date.now();
+  const breakdownOutput = await runBreakdownAgent({
+    project_id: baseResult.screenplay.project_id,
+    title: baseResult.screenplay.title,
+    screenplay: baseResult.screenplay
+  });
+  const breakdownDurationMs = Date.now() - breakdownStartTime;
+
+  console.log(`[Pipeline] Step 6: Executing Budget Agent for project "${breakdownOutput.project_id}"...`);
+  const budgetStartTime = Date.now();
+  const budgetOutput = await runBudgetAgent({
+    project_id: breakdownOutput.project_id,
+    title: breakdownOutput.title,
+    target_budget: conceptInputs.targetBudget ? Number(conceptInputs.targetBudget) : null,
+    production_breakdown: breakdownOutput
+  });
+  const budgetDurationMs = Date.now() - budgetStartTime;
+
+  console.log(`[Pipeline] Step 7: Executing Schedule Agent for project "${breakdownOutput.project_id}"...`);
+  const scheduleStartTime = Date.now();
+  const scheduleOutput = await runScheduleAgent({
+    project_id: breakdownOutput.project_id,
+    title: breakdownOutput.title,
+    target_shoot_days: conceptInputs.targetShootDays ? Number(conceptInputs.targetShootDays) : null,
+    production_breakdown: breakdownOutput,
+    budget: budgetOutput
+  });
+  const scheduleDurationMs = Date.now() - scheduleStartTime;
+
+  console.log(`[Pipeline] Step 8: Persisting Production Analytics to ClickHouse Cloud via MCP...`);
+  try {
+    await recordProductionAnalytics({
+      projectId: breakdownOutput.project_id,
+      title: breakdownOutput.title,
+      breakdown: breakdownOutput,
+      budget: budgetOutput,
+      schedule: scheduleOutput
+    });
+  } catch (analyticsErr) {
+    console.warn(`[Pipeline] Production Analytics recording warning: ${analyticsErr.message}`);
+  }
+
+  return {
+    ...baseResult,
+    breakdown: breakdownOutput,
+    budget: budgetOutput,
+    schedule: scheduleOutput,
+    pipelineTelemetry: {
+      ...baseResult.pipelineTelemetry,
+      breakdownDurationMs,
+      budgetDurationMs,
+      scheduleDurationMs,
+      totalDurationMs: baseResult.pipelineTelemetry.totalDurationMs + breakdownDurationMs + budgetDurationMs + scheduleDurationMs
     }
   };
 }
