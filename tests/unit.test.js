@@ -2148,6 +2148,187 @@ describe('CineAgent Studio - Unit Tests', () => {
     });
   });
 
+  describe('Phase 4D - Schedule Agent Robustness & Normalizer Unit Tests', () => {
+    const validRawSchedule = {
+      project_id: 'test_sched_proj',
+      title: 'Neon Horizon',
+      total_shoot_days: 1,
+      days: [
+        {
+          shooting_day: 1,
+          date_label: 'Day 1',
+          location: 'CYBER LAB',
+          time_of_day: 'NIGHT',
+          scenes: [1],
+          cast: ['Kaito'],
+          extras_count: 2,
+          estimated_day_cost: 25000,
+          setup_notes: 'Lab set up.',
+          rationale: 'Concentrate lab scenes.',
+          risks: ['Turnaround safety']
+        }
+      ],
+      optimization_summary: {
+        locations_consolidated: 1,
+        night_blocks: 1,
+        estimated_location_moves: 0,
+        estimated_shoot_days: 1,
+        scheduling_notes: 'Optimized.'
+      },
+      assumptions: ['Stage available']
+    };
+
+    it('1. Valid raw schedule JSON parses and validates correctly', async () => {
+      const { normalizeSchedulePayload, ScheduleOutputSchema } = await import('../server/agents/scheduleAgent.js');
+      const normalized = normalizeSchedulePayload(validRawSchedule);
+      const validated = ScheduleOutputSchema.parse(normalized);
+      assert.strictEqual(validated.total_shoot_days, 1);
+      assert.strictEqual(validated.days[0].location, 'CYBER LAB');
+    });
+
+    it('2. Fenced JSON is extracted cleanly using extractJsonFromText', async () => {
+      const { extractJsonFromText, normalizeSchedulePayload, ScheduleOutputSchema } = await import('../server/agents/scheduleAgent.js');
+      const fencedText = "```json\n" + JSON.stringify(validRawSchedule) + "\n```";
+      const extracted = extractJsonFromText(fencedText);
+      const normalized = normalizeSchedulePayload(extracted);
+      const validated = ScheduleOutputSchema.parse(normalized);
+      assert.strictEqual(validated.days.length, 1);
+    });
+
+    it('3. Surrounding whitespace around schedule JSON is extracted cleanly', async () => {
+      const { extractJsonFromText, normalizeSchedulePayload, ScheduleOutputSchema } = await import('../server/agents/scheduleAgent.js');
+      const textWithSpaces = "   \n\n  " + JSON.stringify(validRawSchedule) + "  \n\n  ";
+      const extracted = extractJsonFromText(textWithSpaces);
+      const normalized = normalizeSchedulePayload(extracted);
+      assert.strictEqual(normalized.project_id, 'test_sched_proj');
+    });
+
+    it('4. Harmless prose surrounding schedule JSON is safely extracted', async () => {
+      const { extractJsonFromText, normalizeSchedulePayload } = await import('../server/agents/scheduleAgent.js');
+      const textWithProse = "Here is the production schedule:\n" + JSON.stringify(validRawSchedule) + "\nHope this helps!";
+      const extracted = extractJsonFromText(textWithProse);
+      const normalized = normalizeSchedulePayload(extracted);
+      assert.strictEqual(normalized.days[0].scenes[0], 1);
+    });
+
+    it('5. Malformed JSON text is safely rejected as null', async () => {
+      const { extractJsonFromText } = await import('../server/agents/scheduleAgent.js');
+      const malformed = "{ project_id: 'test', days: [ { shooting_day: 1, scenes: [1] ";
+      const extracted = extractJsonFromText(malformed);
+      assert.strictEqual(extracted, null);
+    });
+
+    it('6. Truncated JSON text is safely rejected as null', async () => {
+      const { extractJsonFromText } = await import('../server/agents/scheduleAgent.js');
+      const truncated = JSON.stringify(validRawSchedule).substring(0, 100);
+      const extracted = extractJsonFromText(truncated);
+      assert.strictEqual(extracted, null);
+    });
+
+    it('7. Missing required days array fails schema validation', async () => {
+      const { normalizeSchedulePayload, ScheduleOutputSchema } = await import('../server/agents/scheduleAgent.js');
+      const missingDays = { project_id: 'test', title: 'Test' };
+      const normalized = normalizeSchedulePayload(missingDays);
+      assert.throws(() => {
+        ScheduleOutputSchema.parse(normalized);
+      }, /Schedule must contain at least 1 shooting day/);
+    });
+
+    it('8. Wrong field types are safely coerced by normalizer without throwing NaN', async () => {
+      const { normalizeSchedulePayload, ScheduleOutputSchema } = await import('../server/agents/scheduleAgent.js');
+      const rawWithBadTypes = {
+        project_id: 'test_sched',
+        title: 'Test',
+        total_shoot_days: '1',
+        days: [
+          {
+            shooting_day: '1',
+            date_label: 'Day 1',
+            location: 'LAB',
+            time_of_day: 'night',
+            scenes: ['1'],
+            cast: 'Kaito',
+            extras_count: '2',
+            estimated_day_cost: '$25,000',
+            setup_notes: 'Notes',
+            rationale: 'Rationale',
+            risks: 'Risk 1'
+          }
+        ]
+      };
+      const normalized = normalizeSchedulePayload(rawWithBadTypes);
+      const validated = ScheduleOutputSchema.parse(normalized);
+      assert.strictEqual(validated.total_shoot_days, 1);
+      assert.strictEqual(validated.days[0].shooting_day, 1);
+      assert.strictEqual(validated.days[0].estimated_day_cost, 25000);
+      assert.strictEqual(validated.days[0].time_of_day, 'NIGHT');
+      assert.strictEqual(validated.days[0].scenes[0], 1);
+    });
+
+    it('9. Invalid scene assignments throw expected fidelity validation error', async () => {
+      const { validateScheduleFidelity } = await import('../server/agents/scheduleAgent.js');
+      const breakdown = { project_id: 'p1', title: 'T1', scenes: [{ scene_number: 1 }, { scene_number: 2 }] };
+      const schedule = {
+        project_id: 'p1',
+        title: 'T1',
+        total_shoot_days: 1,
+        days: [{ shooting_day: 1, scenes: [1] }]
+      };
+      assert.throws(() => {
+        validateScheduleFidelity(breakdown, undefined, schedule);
+      }, /Scene count mismatch/);
+    });
+
+    it('10. Invalid shooting day numbers fail non-sequential fidelity validation', async () => {
+      const { validateScheduleFidelity } = await import('../server/agents/scheduleAgent.js');
+      const breakdown = { project_id: 'p1', title: 'T1', scenes: [{ scene_number: 1 }, { scene_number: 2 }] };
+      const schedule = {
+        project_id: 'p1',
+        title: 'T1',
+        total_shoot_days: 2,
+        days: [{ shooting_day: 1, scenes: [1] }, { shooting_day: 3, scenes: [2] }]
+      };
+      assert.throws(() => {
+        validateScheduleFidelity(breakdown, undefined, schedule);
+      }, /Non-sequential shooting day/);
+    });
+
+    it('11. Normalizer preserves all required fields and aliases', async () => {
+      const { normalizeSchedulePayload } = await import('../server/agents/scheduleAgent.js');
+      const rawAlias = {
+        projectId: 'p_alias',
+        title: 'Title Alias',
+        shooting_days: [
+          {
+            day: '1',
+            location_name: 'LAB',
+            time: 'daytime',
+            scene: '1',
+            notes: 'Setup'
+          }
+        ]
+      };
+      const normalized = normalizeSchedulePayload(rawAlias);
+      assert.strictEqual(normalized.project_id, 'p_alias');
+      assert.strictEqual(normalized.days[0].time_of_day, 'DAY');
+      assert.strictEqual(normalized.days[0].scenes[0], 1);
+    });
+
+    it('12. Normalizer ensures no undefined required values in days or optimization summary', async () => {
+      const { normalizeSchedulePayload, ScheduleOutputSchema } = await import('../server/agents/scheduleAgent.js');
+      const minimalRaw = {
+        days: [{ scenes: [1] }]
+      };
+      const normalized = normalizeSchedulePayload(minimalRaw);
+      const validated = ScheduleOutputSchema.parse(normalized);
+      assert.ok(validated.project_id);
+      assert.ok(validated.title);
+      assert.ok(validated.days[0].setup_notes);
+      assert.ok(validated.days[0].rationale);
+      assert.ok(validated.optimization_summary.scheduling_notes);
+    });
+  });
+
   describe('Centralized Gemini Rate-Limit & Policy Unit Tests', () => {
     it('1. 429 classification accurately identifies all 429 / quota error patterns', async () => {
       const { is429RateLimitError } = await import('../server/config/geminiConfig.js');

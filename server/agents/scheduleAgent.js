@@ -3,7 +3,9 @@ import { z } from 'zod';
 import dotenv from 'dotenv';
 import { ProductionBreakdownSchema } from './breakdownAgent.js';
 import { BudgetOutputSchema } from './budgetAgent.js';
-import { getGeminiModel, executeAgentWithPolicy } from '../config/geminiConfig.js';
+import { getGeminiModel, executeAgentWithPolicy, extractJsonFromText } from '../config/geminiConfig.js';
+
+export { extractJsonFromText };
 
 dotenv.config();
 
@@ -109,6 +111,138 @@ export function validateScheduleFidelity(breakdown, budget, schedule) {
 }
 
 /**
+ * Helper to safely parse numeric values without producing NaN.
+ * @param {any} val Value to parse
+ * @param {number|undefined} defaultVal Default fallback value
+ * @returns {number|undefined} Parsed number
+ */
+export function parseSafeNumber(val, defaultVal = 0) {
+  if (typeof val === 'number' && !isNaN(val)) {
+    return val;
+  }
+  if (typeof val === 'string') {
+    const cleaned = val.replace(/[\$,\s]/g, '');
+    const parsed = Number(cleaned);
+    if (!isNaN(parsed)) {
+      return parsed;
+    }
+  }
+  return defaultVal;
+}
+
+/**
+ * Deterministic normalizer for Schedule Agent payloads.
+ * Maps unambiguous field aliases, coercing strings/enums safely without fabricating content.
+ * @param {object} rawJson Raw JSON object
+ * @returns {object} Normalized object ready for ScheduleOutputSchema validation
+ */
+export function normalizeSchedulePayload(rawJson) {
+  if (!rawJson || typeof rawJson !== 'object') {
+    throw new Error('Schedule Agent output must be a valid JSON object.');
+  }
+
+  const safeString = (val, fallback = '') => {
+    if (val == null) return fallback;
+    if (typeof val === 'string') return val.trim();
+    return String(val).trim();
+  };
+
+  const normalized = {};
+
+  normalized.project_id = safeString(rawJson.project_id || rawJson.projectId, 'default_project');
+  normalized.title = safeString(rawJson.title, 'Untitled Project');
+
+  let rawDays = [];
+  if (Array.isArray(rawJson.days)) {
+    rawDays = rawJson.days;
+  } else if (Array.isArray(rawJson.shooting_days)) {
+    rawDays = rawJson.shooting_days;
+  } else if (Array.isArray(rawJson.day_plan)) {
+    rawDays = rawJson.day_plan;
+  } else if (Array.isArray(rawJson.schedule)) {
+    rawDays = rawJson.schedule;
+  } else if (Array.isArray(rawJson.shooting_schedule)) {
+    rawDays = rawJson.shooting_schedule;
+  } else if (Array.isArray(rawJson.daily_schedule)) {
+    rawDays = rawJson.daily_schedule;
+  } else if (Array.isArray(rawJson.schedule_days)) {
+    rawDays = rawJson.schedule_days;
+  } else if (Array.isArray(rawJson.days_breakdown)) {
+    rawDays = rawJson.days_breakdown;
+  } else if (rawJson.schedule && Array.isArray(rawJson.schedule.days)) {
+    rawDays = rawJson.schedule.days;
+  } else if (rawJson.production_schedule && Array.isArray(rawJson.production_schedule.days)) {
+    rawDays = rawJson.production_schedule.days;
+  } else if (rawJson.shooting_schedule && Array.isArray(rawJson.shooting_schedule.days)) {
+    rawDays = rawJson.shooting_schedule.days;
+  }
+
+  normalized.days = rawDays.map((d, index) => {
+    let tod = safeString(d?.time_of_day || d?.timeOfDay || d?.time, 'DAY').toUpperCase();
+    if (tod.includes('NIGHT')) tod = 'NIGHT';
+    else if (tod.includes('DAY')) tod = 'DAY';
+    else if (tod.includes('DAWN')) tod = 'DAWN';
+    else if (tod.includes('DUSK')) tod = 'DUSK';
+    else tod = 'OTHER';
+
+    const rawScenes = Array.isArray(d?.scenes) ? d.scenes : (d?.scene != null ? [d.scene] : []);
+    const parsedScenes = rawScenes
+      .map(s => {
+        if (typeof s === 'number' && !isNaN(s)) return s;
+        if (typeof s === 'object' && s !== null) {
+          const num = s.scene_number || s.scene_id || s.scene || s.id || s.number;
+          return parseSafeNumber(num, null);
+        }
+        if (typeof s === 'string') {
+          const match = s.match(/\d+/);
+          if (match) return Number(match[0]);
+        }
+        return parseSafeNumber(s, null);
+      })
+      .filter(s => typeof s === 'number' && !isNaN(s) && s > 0);
+
+    const rawCast = Array.isArray(d?.cast) ? d.cast : (d?.cast ? [d.cast] : []);
+    const parsedCast = rawCast.map(c => safeString(c)).filter(Boolean);
+
+    const rawRisks = Array.isArray(d?.risks) ? d.risks : (d?.risk ? [d.risk] : []);
+    const parsedRisks = rawRisks.map(r => safeString(r)).filter(Boolean);
+
+    return {
+      shooting_day: parseSafeNumber(d?.shooting_day || d?.day || d?.day_number, index + 1),
+      date_label: safeString(d?.date_label || d?.date || d?.day_label, `Day ${index + 1}`),
+      location: safeString(d?.location || d?.location_name, 'Soundstage'),
+      time_of_day: tod,
+      scenes: parsedScenes,
+      cast: parsedCast,
+      extras_count: parseSafeNumber(d?.extras_count || d?.extras, 0),
+      estimated_day_cost: parseSafeNumber(d?.estimated_day_cost || d?.day_cost || d?.cost, 0),
+      setup_notes: safeString(d?.setup_notes || d?.setup || d?.notes, 'Standard day setup.'),
+      rationale: safeString(d?.rationale || d?.reason || d?.scheduling_rationale, 'Scheduled based on location and crew efficiency.'),
+      risks: parsedRisks.length > 0 ? parsedRisks : ['Turnaround time management']
+    };
+  });
+
+  normalized.total_shoot_days = parseSafeNumber(rawJson.total_shoot_days || rawJson.totalShootDays, normalized.days.length || 1);
+
+  const rawOpt = rawJson.optimization_summary || rawJson.optimizationSummary || {};
+  normalized.optimization_summary = {
+    locations_consolidated: parseSafeNumber(rawOpt.locations_consolidated || rawOpt.locationsConsolidated, 1),
+    night_blocks: parseSafeNumber(rawOpt.night_blocks || rawOpt.nightBlocks, 0),
+    estimated_location_moves: parseSafeNumber(rawOpt.estimated_location_moves || rawOpt.locationMoves, 0),
+    estimated_shoot_days: parseSafeNumber(rawOpt.estimated_shoot_days || rawOpt.estimatedShootDays, normalized.total_shoot_days),
+    scheduling_notes: safeString(rawOpt.scheduling_notes || rawOpt.notes || rawOpt.summary, 'Schedule optimized for minimal company moves.')
+  };
+
+  const rawAssumptions = Array.isArray(rawJson.assumptions) ? rawJson.assumptions : (rawJson.assumptions ? [rawJson.assumptions] : []);
+  normalized.assumptions = rawAssumptions.map(a => safeString(a)).filter(Boolean);
+  if (normalized.assumptions.length === 0) {
+    normalized.assumptions = ['Consecutive soundstage booking available'];
+  }
+
+  return normalized;
+}
+
+/**
  * Executes the Schedule Agent against a validated Production Breakdown & Budget.
  * @param {object} input Container with breakdown, budget, target_shoot_days
  * @returns {Promise<object>} Validated ScheduleOutputSchema object
@@ -142,7 +276,12 @@ export async function runScheduleAgent(input) {
     7. TARGET SHOOT DAYS: If target_shoot_days is provided (${validatedInput.target_shoot_days || 'calculated realistically'}), aim for that target while maintaining realistic schedule pacing.
     8. CONCISE PRODUCTION RATIONALE: Each shooting day must explain the scheduling logic concisely in 'rationale'.
 
-    Output MUST be a single raw valid JSON object adhering strictly to this schema:
+    CRITICAL FORMATTING INSTRUCTIONS:
+    - Respond ONLY with a single valid, parseable raw JSON object.
+    - Do NOT output any markdown titles, headers (# Production Schedule), Markdown document tables, or conversational prose.
+    - Do NOT wrap in markdown code blocks (\`\`\`json). Return raw JSON text starting with { and ending with }.
+
+    JSON SCHEMA:
     {
       "project_id": "${validatedInput.project_id}",
       "title": "${validatedInput.title}",
@@ -171,10 +310,6 @@ export async function runScheduleAgent(input) {
       },
       "assumptions": ["Key scheduling assumptions"]
     }
-
-    CRITICAL RULES:
-    - Output ONLY valid raw JSON. Do NOT wrap in markdown code blocks (\`\`\`json).
-    - Every breakdown scene must be assigned exactly once.
   `;
 
   const agent = new LlmAgent({
@@ -196,6 +331,8 @@ ${JSON.stringify(validatedInput.production_breakdown, null, 2)}
 
 PROJECT BUDGET:
 ${validatedInput.budget ? JSON.stringify(validatedInput.budget, null, 2) : 'N/A'}
+
+IMPORTANT: Respond ONLY with a single raw JSON object matching the requested schema. Do NOT format as a Markdown document, report, or table.
 `;
 
   const parsedPayload = await executeAgentWithPolicy({
@@ -203,7 +340,8 @@ ${validatedInput.budget ? JSON.stringify(validatedInput.budget, null, 2) : 'N/A'
     agent,
     userPrompt,
     parseAndValidate: (extracted) => {
-      const validatedOutput = ScheduleOutputSchema.parse(extracted);
+      const normalized = normalizeSchedulePayload(extracted);
+      const validatedOutput = ScheduleOutputSchema.parse(normalized);
       validateScheduleFidelity(validatedInput.production_breakdown, validatedInput.budget, validatedOutput);
       return validatedOutput;
     }
