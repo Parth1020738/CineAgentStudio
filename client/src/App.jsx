@@ -4,6 +4,7 @@ import BreakdownView from './components/BreakdownView.jsx';
 import BudgetView from './components/BudgetView.jsx';
 import ScheduleView from './components/ScheduleView.jsx';
 import ProductionInsightsView from './components/ProductionInsightsView.jsx';
+import ExportView from './components/ExportView.jsx';
 
 export default function App() {
   const [formData, setFormData] = useState({
@@ -512,7 +513,7 @@ export default function App() {
                     onClick={() => setMainTab('production_planning')}
                   >
                     <span className="tab-icon">🎬</span> Production Planning
-                    <span className="tab-pill">4 Views</span>
+                    <span className="tab-pill">5 Views</span>
                   </button>
                 )}
               </div>
@@ -664,6 +665,13 @@ export default function App() {
                   >
                     📊 Production Insights
                   </button>
+                  <button
+                    type="button"
+                    className={`subnav-btn ${planningSubTab === 'export' ? 'active' : ''}`}
+                    onClick={() => setPlanningSubTab('export')}
+                  >
+                    📦 Export
+                  </button>
                 </div>
 
                 {/* Sub-View 1: Breakdown */}
@@ -686,6 +694,14 @@ export default function App() {
                   <ProductionInsightsView
                     insights={resultData.productionInsights}
                     projectId={resultData.projectId}
+                  />
+                )}
+
+                {/* Sub-View 5: Export Workspace */}
+                {planningSubTab === 'export' && (
+                  <ExportView
+                    productionPlan={resultData}
+                    isDemoData={resultData.isDemoData}
                   />
                 )}
               </div>

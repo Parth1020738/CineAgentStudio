@@ -134,9 +134,11 @@ export function parseSafeNumber(val, defaultVal = 0) {
  * Deterministic normalizer for Schedule Agent payloads.
  * Maps unambiguous field aliases, coercing strings/enums safely without fabricating content.
  * @param {object} rawJson Raw JSON object
+ * @param {string} defaultProjectId Fallback project ID from input
+ * @param {string} defaultTitle Fallback title from input
  * @returns {object} Normalized object ready for ScheduleOutputSchema validation
  */
-export function normalizeSchedulePayload(rawJson) {
+export function normalizeSchedulePayload(rawJson, defaultProjectId = 'default_project', defaultTitle = 'Untitled Project') {
   if (!rawJson || typeof rawJson !== 'object') {
     throw new Error('Schedule Agent output must be a valid JSON object.');
   }
@@ -147,34 +149,34 @@ export function normalizeSchedulePayload(rawJson) {
     return String(val).trim();
   };
 
+  let root = rawJson;
+  if (rawJson.shooting_schedule && typeof rawJson.shooting_schedule === 'object' && !Array.isArray(rawJson.shooting_schedule)) {
+    root = rawJson.shooting_schedule;
+  } else if (rawJson.schedule && typeof rawJson.schedule === 'object' && !Array.isArray(rawJson.schedule)) {
+    root = rawJson.schedule;
+  }
+
   const normalized = {};
 
-  normalized.project_id = safeString(rawJson.project_id || rawJson.projectId, 'default_project');
-  normalized.title = safeString(rawJson.title, 'Untitled Project');
+  // Force canonical metadata from source parameters when available
+  normalized.project_id = safeString(root.project_id || root.projectId || rawJson.project_id, defaultProjectId);
+  normalized.title = safeString(root.title || rawJson.title, defaultTitle);
 
   let rawDays = [];
   if (Array.isArray(rawJson.days)) {
     rawDays = rawJson.days;
+  } else if (Array.isArray(rawJson.shooting_schedule)) {
+    rawDays = rawJson.shooting_schedule;
+  } else if (Array.isArray(rawJson.schedule)) {
+    rawDays = rawJson.schedule;
   } else if (Array.isArray(rawJson.shooting_days)) {
     rawDays = rawJson.shooting_days;
   } else if (Array.isArray(rawJson.day_plan)) {
     rawDays = rawJson.day_plan;
-  } else if (Array.isArray(rawJson.schedule)) {
-    rawDays = rawJson.schedule;
-  } else if (Array.isArray(rawJson.shooting_schedule)) {
-    rawDays = rawJson.shooting_schedule;
-  } else if (Array.isArray(rawJson.daily_schedule)) {
-    rawDays = rawJson.daily_schedule;
-  } else if (Array.isArray(rawJson.schedule_days)) {
-    rawDays = rawJson.schedule_days;
-  } else if (Array.isArray(rawJson.days_breakdown)) {
-    rawDays = rawJson.days_breakdown;
-  } else if (rawJson.schedule && Array.isArray(rawJson.schedule.days)) {
-    rawDays = rawJson.schedule.days;
-  } else if (rawJson.production_schedule && Array.isArray(rawJson.production_schedule.days)) {
-    rawDays = rawJson.production_schedule.days;
-  } else if (rawJson.shooting_schedule && Array.isArray(rawJson.shooting_schedule.days)) {
-    rawDays = rawJson.shooting_schedule.days;
+  } else if (Array.isArray(root.days)) {
+    rawDays = root.days;
+  } else if (root.schedule && Array.isArray(root.schedule.days)) {
+    rawDays = root.schedule.days;
   }
 
   normalized.days = rawDays.map((d, index) => {
@@ -210,7 +212,7 @@ export function normalizeSchedulePayload(rawJson) {
     return {
       shooting_day: parseSafeNumber(d?.shooting_day || d?.day || d?.day_number, index + 1),
       date_label: safeString(d?.date_label || d?.date || d?.day_label, `Day ${index + 1}`),
-      location: safeString(d?.location || d?.location_name, 'Soundstage'),
+      location: safeString(d?.location || d?.location_name, 'Location'),
       time_of_day: tod,
       scenes: parsedScenes,
       cast: parsedCast,
@@ -222,9 +224,9 @@ export function normalizeSchedulePayload(rawJson) {
     };
   });
 
-  normalized.total_shoot_days = parseSafeNumber(rawJson.total_shoot_days || rawJson.totalShootDays, normalized.days.length || 1);
+  normalized.total_shoot_days = parseSafeNumber(rawJson.total_shoot_days || rawJson.totalShootDays || root.total_shoot_days, normalized.days.length || 1);
 
-  const rawOpt = rawJson.optimization_summary || rawJson.optimizationSummary || {};
+  const rawOpt = rawJson.optimization_summary || rawJson.optimizationSummary || root.optimization_summary || {};
   normalized.optimization_summary = {
     locations_consolidated: parseSafeNumber(rawOpt.locations_consolidated || rawOpt.locationsConsolidated, 1),
     night_blocks: parseSafeNumber(rawOpt.night_blocks || rawOpt.nightBlocks, 0),
@@ -240,6 +242,172 @@ export function normalizeSchedulePayload(rawJson) {
   }
 
   return normalized;
+}
+
+/**
+ * Deterministically repairs structural assignment errors in a schedule candidate object.
+ * Corrects duplicate scenes, missing scenes, empty days, and non-sequential day numbers
+ * using strictly authoritative source data from productionBreakdown and budget.
+ *
+ * @param {object} candidate Candidate normalized schedule payload
+ * @param {object} breakdown Authoritative production breakdown
+ * @param {object|undefined} budget Authoritative budget
+ * @param {number|undefined} targetShootDays Optional requested target shoot days
+ * @returns {object} Structurally repaired schedule payload ready for Zod and fidelity validation
+ */
+export function repairScheduleAssignments(candidate, breakdown, budget, targetShootDays) {
+  if (!breakdown || !breakdown.scenes || breakdown.scenes.length === 0) {
+    throw new Error('Deterministic repair failed: Breakdown contains no valid scenes.');
+  }
+
+  const projectId = breakdown.project_id;
+  const title = breakdown.title;
+
+  const sourceScenes = breakdown.scenes;
+  const sourceSceneNums = sourceScenes.map(s => s.scene_number);
+  const sourceSceneSet = new Set(sourceSceneNums);
+
+  const sceneCostMap = new Map();
+  if (budget && Array.isArray(budget.scene_costs)) {
+    for (const sc of budget.scene_costs) {
+      sceneCostMap.set(sc.scene_number, parseSafeNumber(sc.estimated_cost, 0));
+    }
+  }
+  for (const s of sourceScenes) {
+    if (!sceneCostMap.has(s.scene_number)) {
+      sceneCostMap.set(s.scene_number, parseSafeNumber(s.estimated_cost, 0));
+    }
+  }
+
+  const sceneMetaMap = new Map();
+  for (const s of sourceScenes) {
+    sceneMetaMap.set(s.scene_number, s);
+  }
+
+  let days = Array.isArray(candidate?.days) ? candidate.days : [];
+
+  const assignedSet = new Set();
+  const cleanedDays = [];
+
+  for (let i = 0; i < days.length; i++) {
+    const rawDay = days[i];
+    const rawScenes = Array.isArray(rawDay?.scenes) ? rawDay.scenes : [];
+    const validScenesForDay = [];
+
+    for (const num of rawScenes) {
+      if (sourceSceneSet.has(num) && !assignedSet.has(num)) {
+        assignedSet.add(num);
+        validScenesForDay.push(num);
+      }
+    }
+
+    cleanedDays.push({
+      ...rawDay,
+      shooting_day: i + 1,
+      scenes: validScenesForDay
+    });
+  }
+
+  const missingScenes = sourceSceneNums.filter(n => !assignedSet.has(n));
+
+  let targetDays = cleanedDays.length;
+  if (targetShootDays && targetShootDays > 0) {
+    targetDays = Math.min(targetShootDays, sourceSceneNums.length);
+  }
+  if (targetDays <= 0) {
+    targetDays = Math.min(3, sourceSceneNums.length);
+  }
+  targetDays = Math.max(1, Math.min(targetDays, sourceSceneNums.length));
+
+  let activeDays = cleanedDays.filter(d => d.scenes.length > 0);
+  if (activeDays.length === 0) {
+    const firstScene = sceneMetaMap.get(sourceSceneNums[0]);
+    activeDays = [
+      {
+        shooting_day: 1,
+        date_label: 'Day 1',
+        location: firstScene?.location || 'Location 1',
+        time_of_day: firstScene?.time_of_day || 'DAY',
+        scenes: [],
+        cast: firstScene?.characters || [],
+        extras_count: firstScene?.extras_count || 0,
+        estimated_day_cost: 0,
+        setup_notes: 'Standard production setup.',
+        rationale: 'Primary production day.',
+        risks: ['Schedule turnaround']
+      }
+    ];
+  }
+
+  while (activeDays.length < targetDays && missingScenes.length > 0) {
+    const nextSceneNum = missingScenes[0];
+    const nextSceneMeta = sceneMetaMap.get(nextSceneNum);
+    activeDays.push({
+      shooting_day: activeDays.length + 1,
+      date_label: `Day ${activeDays.length + 1}`,
+      location: nextSceneMeta?.location || 'Location',
+      time_of_day: nextSceneMeta?.time_of_day || 'DAY',
+      scenes: [],
+      cast: nextSceneMeta?.characters || [],
+      extras_count: nextSceneMeta?.extras_count || 0,
+      estimated_day_cost: 0,
+      setup_notes: 'Production setup.',
+      rationale: 'Scheduled day for remaining scenes.',
+      risks: ['Turnaround management']
+    });
+  }
+
+  let dayIdx = 0;
+  for (const mNum of missingScenes) {
+    activeDays[dayIdx % activeDays.length].scenes.push(mNum);
+    assignedSet.add(mNum);
+    dayIdx++;
+  }
+
+  const finalDays = activeDays.map((day, idx) => {
+    const dayScenes = day.scenes;
+    const dayCastSet = new Set(Array.isArray(day.cast) ? day.cast : []);
+    let dayCost = 0;
+
+    for (const sNum of dayScenes) {
+      const meta = sceneMetaMap.get(sNum);
+      if (meta) {
+        (meta.characters || []).forEach(c => dayCastSet.add(c));
+      }
+      dayCost += (sceneCostMap.get(sNum) || 0);
+    }
+
+    return {
+      shooting_day: idx + 1,
+      date_label: day.date_label || `Day ${idx + 1}`,
+      location: day.location || sceneMetaMap.get(dayScenes[0])?.location || 'Location',
+      time_of_day: day.time_of_day || sceneMetaMap.get(dayScenes[0])?.time_of_day || 'DAY',
+      scenes: dayScenes,
+      cast: Array.from(dayCastSet),
+      extras_count: parseSafeNumber(day.extras_count, 0),
+      estimated_day_cost: dayCost,
+      setup_notes: day.setup_notes || 'Standard day setup.',
+      rationale: day.rationale || 'Scheduled for optimal production workflow.',
+      risks: Array.isArray(day.risks) && day.risks.length > 0 ? day.risks : ['Turnaround management']
+    };
+  });
+
+  return {
+    project_id: projectId,
+    title: title,
+    total_shoot_days: finalDays.length,
+    days: finalDays,
+    optimization_summary: {
+      locations_consolidated: parseSafeNumber(candidate?.optimization_summary?.locations_consolidated, 1),
+      night_blocks: parseSafeNumber(candidate?.optimization_summary?.night_blocks, 0),
+      estimated_location_moves: parseSafeNumber(candidate?.optimization_summary?.estimated_location_moves, 0),
+      estimated_shoot_days: finalDays.length,
+      scheduling_notes: candidate?.optimization_summary?.scheduling_notes || 'Schedule structurally repaired and verified.'
+    },
+    assumptions: Array.isArray(candidate?.assumptions) && candidate.assumptions.length > 0
+      ? candidate.assumptions
+      : ['Consecutive soundstage booking available']
+  };
 }
 
 /**
@@ -262,55 +430,33 @@ export async function runScheduleAgent(input) {
     budget: input.budget
   });
 
-  const systemInstruction = `
-    You are an expert film Production Schedule Agent for CineAgent Studio.
-    Your task is to analyze a Production Breakdown (and optional Budget) to generate an optimized, realistic production shooting schedule.
+  const sourceSceneNumbers = validatedInput.production_breakdown.scenes.map(s => s.scene_number);
 
-    OPTIMIZATION CRITERIA:
-    1. LOCATION CONSOLIDATION: Group scenes shot in the same location on consecutive shooting days to minimize company moves.
-    2. RESPECT TIME OF DAY (DAY/NIGHT): Group night shoots into continuous night blocks to avoid costly crew turnaround flips.
-    3. CAST LOAD EFFICIENCY: Group scenes requiring the same principal cast members to minimize actor hold/call days.
-    4. RESPECT SETUP & COMPLEXITY: Group scenes with complex rigs together.
-    5. BUDGET AWARENESS: Consider scene costs and equipment needs when structuring the day plan.
-    6. SCENE COVERAGE: Every scene from the breakdown must appear in the schedule EXACTLY ONCE. No missing scenes, no duplicates.
-    7. TARGET SHOOT DAYS: If target_shoot_days is provided (${validatedInput.target_shoot_days || 'calculated realistically'}), aim for that target while maintaining realistic schedule pacing.
-    8. CONCISE PRODUCTION RATIONALE: Each shooting day must explain the scheduling logic concisely in 'rationale'.
+  const systemInstruction = `Return JSON only.
 
-    CRITICAL FORMATTING INSTRUCTIONS:
-    - Respond ONLY with a single valid, parseable raw JSON object.
-    - Do NOT output any markdown titles, headers (# Production Schedule), Markdown document tables, or conversational prose.
-    - Do NOT wrap in markdown code blocks (\`\`\`json). Return raw JSON text starting with { and ending with }.
+Create an optimized shooting schedule from the supplied source scenes.
 
-    JSON SCHEMA:
-    {
-      "project_id": "${validatedInput.project_id}",
-      "title": "${validatedInput.title}",
-      "total_shoot_days": number (positive integer, equal to days.length),
-      "days": [
-        {
-          "shooting_day": number (1, 2, 3...),
-          "date_label": "Day 1",
-          "location": "LOCATION NAME",
-          "time_of_day": "NIGHT" | "DAY" | "DAWN" | "DUSK",
-          "scenes": [scene_numbers],
-          "cast": ["CHARACTER_NAME"],
-          "extras_count": number,
-          "estimated_day_cost": number,
-          "setup_notes": "Key equipment and technical setup required for the day",
-          "rationale": "Clear production reason why these scenes are grouped on this day",
-          "risks": ["Specific production risks, e.g., weather delay, night turnaround"]
-        }
-      ],
-      "optimization_summary": {
-        "locations_consolidated": number,
-        "night_blocks": number,
-        "estimated_location_moves": number,
-        "estimated_shoot_days": number,
-        "scheduling_notes": "Summary of overall schedule efficiency"
-      },
-      "assumptions": ["Key scheduling assumptions"]
-    }
-  `;
+Hard constraints:
+- days must be non-empty
+- every day must contain at least one scene
+- every source scene must appear exactly once
+- no scene may appear twice
+- use only source scene numbers
+- shooting_day values must be sequential
+- project_id and title must match the supplied project
+- total_shoot_days must equal days.length
+- do not invent scenes
+- do not invent costs
+- preserve location/time/cast fidelity
+
+Optimization goals:
+- consolidate locations
+- minimize location moves
+- group compatible time-of-day blocks
+- respect target shoot days
+- minimize unnecessary company moves
+
+Return only the final JSON object.`;
 
   const agent = new LlmAgent({
     name: 'schedule_agent',
@@ -325,6 +471,7 @@ Generate the production shooting schedule for this project:
 Project ID: ${validatedInput.project_id}
 Title: ${validatedInput.title}
 Target Shoot Days: ${validatedInput.target_shoot_days ? validatedInput.target_shoot_days : 'Auto-calculate based on breakdown'}
+Source Scene Numbers: [${sourceSceneNumbers.join(', ')}]
 
 PRODUCTION BREAKDOWN:
 ${JSON.stringify(validatedInput.production_breakdown, null, 2)}
@@ -332,29 +479,72 @@ ${JSON.stringify(validatedInput.production_breakdown, null, 2)}
 PROJECT BUDGET:
 ${validatedInput.budget ? JSON.stringify(validatedInput.budget, null, 2) : 'N/A'}
 
-IMPORTANT: Respond ONLY with a single raw JSON object matching the requested schema. Do NOT format as a Markdown document, report, or table.
+IMPORTANT: project_id MUST be "${validatedInput.project_id}". title MUST be "${validatedInput.title}". Every breakdown scene from [${sourceSceneNumbers.join(', ')}] MUST appear in 'scenes' EXACTLY ONCE across all days. Top-level keys MUST be "project_id", "title", "total_shoot_days", "days", "optimization_summary", "assumptions". Respond ONLY with the raw JSON object.
 `;
 
-  const parsedPayload = await executeAgentWithPolicy({
-    agentName: 'schedule_agent',
-    agent,
-    userPrompt,
-    parseAndValidate: (extracted) => {
-      const normalized = normalizeSchedulePayload(extracted);
-      const validatedOutput = ScheduleOutputSchema.parse(normalized);
-      validateScheduleFidelity(validatedInput.production_breakdown, validatedInput.budget, validatedOutput);
-      return validatedOutput;
-    }
-  });
+  let candidateJson = null;
+  let initialValidationError = null;
 
-  const durationMs = Date.now() - startTime;
-  return {
-    ...parsedPayload,
-    telemetry: {
-      runId: `run_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-      projectId: parsedPayload.project_id,
+  console.log('[schedule_agent] initial generation');
+  try {
+    const rawResult = await executeAgentWithPolicy({
       agentName: 'schedule_agent',
-      durationMs
+      agent,
+      userPrompt,
+      parseAndValidate: (extracted) => {
+        candidateJson = extracted;
+        const normalized = normalizeSchedulePayload(extracted, validatedInput.project_id, validatedInput.title);
+        const validatedOutput = ScheduleOutputSchema.parse(normalized);
+        validateScheduleFidelity(validatedInput.production_breakdown, validatedInput.budget, validatedOutput);
+        return validatedOutput;
+      }
+    });
+
+    console.log('[schedule_agent] final validation passed');
+    return {
+      ...rawResult,
+      telemetry: {
+        runId: `run_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+        projectId: rawResult.project_id,
+        agentName: 'schedule_agent',
+        durationMs: Date.now() - startTime
+      }
+    };
+  } catch (err) {
+    initialValidationError = err.message;
+    console.warn(`[schedule_agent] validation failed: ${initialValidationError}`);
+  }
+
+  // Fallback to deterministic structural assignment repair if LLM validation failed
+  if (candidateJson || validatedInput.production_breakdown) {
+    try {
+      console.log('[schedule_agent] deterministic structural repair');
+      const normalizedCandidate = candidateJson ? normalizeSchedulePayload(candidateJson, validatedInput.project_id, validatedInput.title) : {};
+      const repaired = repairScheduleAssignments(
+        normalizedCandidate,
+        validatedInput.production_breakdown,
+        validatedInput.budget,
+        validatedInput.target_shoot_days
+      );
+
+      const validatedRepaired = ScheduleOutputSchema.parse(repaired);
+      validateScheduleFidelity(validatedInput.production_breakdown, validatedInput.budget, validatedRepaired);
+      console.log('[schedule_agent] final validation passed');
+
+      return {
+        ...validatedRepaired,
+        telemetry: {
+          runId: `run_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+          projectId: validatedRepaired.project_id,
+          agentName: 'schedule_agent',
+          durationMs: Date.now() - startTime
+        }
+      };
+    } catch (repairErr) {
+      console.error(`[schedule_agent] validation failed: ${repairErr.message}`);
+      throw new Error(`Schedule Agent failed: ${repairErr.message}`);
     }
-  };
+  }
+
+  throw new Error(`Schedule Agent failed: ${initialValidationError || 'No candidate schedule produced.'}`);
 }

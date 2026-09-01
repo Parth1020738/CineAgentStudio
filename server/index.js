@@ -24,17 +24,28 @@ import {
 } from './mcp/clickhouseMcp.js';
 import { logGeminiConfig, is429RateLimitError } from './config/geminiConfig.js';
 import { isDemoModeEnabled, getDemoProductionPlan } from './fixtures/demoFixtures.js';
+import { createExportPackage, generateExportFileContent, getSafeExportFilename, EXPORT_TYPES } from './services/exportService.js';
+
+import path from 'path';
+import fs from 'fs';
 
 dotenv.config();
 
 const app = express();
-const PORT = process.env.PORT || 3001;
+const PORT = process.env.PORT || 8080;
 
 app.use(cors());
 app.use(express.json());
 
 // In-process request throttling guard for production-plan endpoint
 const activeProductionPlanRequests = new Set();
+
+// Serve compiled React frontend in production if dist directory exists
+const clientDistPath = path.resolve('client/dist');
+if (fs.existsSync(clientDistPath)) {
+  console.log(`[Express] Serving React production build from ${clientDistPath}`);
+  app.use(express.static(clientDistPath));
+}
 
 // Health status endpoint
 app.get('/health', (req, res) => {
@@ -306,6 +317,63 @@ app.get('/api/pipeline/production-insights/:projectId', async (req, res) => {
   }
 });
 
+// Canonical Production Plan Export Endpoint (Phase 5B, 5C & 5D)
+app.post('/api/export', async (req, res) => {
+  const { productionPlan, exportType, projectId, title, download } = req.body || {};
+
+  try {
+    const targetType = exportType || EXPORT_TYPES.FULL_PRODUCTION_PACKAGE;
+    const exportPackage = createExportPackage({
+      productionPlan,
+      exportType: targetType,
+      projectId,
+      title
+    });
+
+    const filename = getSafeExportFilename(exportPackage.metadata.project_title || title || 'project', targetType);
+
+    if (targetType.endsWith('_PDF')) {
+      const pdfBuffer = await generateExportFileContent(exportPackage, targetType);
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      return res.send(pdfBuffer);
+    }
+
+    if (targetType.endsWith('_CSV') || targetType.endsWith('_XLSX')) {
+      const csvContent = await generateExportFileContent(exportPackage, targetType);
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      return res.send(csvContent);
+    }
+
+    if (targetType === EXPORT_TYPES.FULL_PRODUCTION_BIBLE_ZIP) {
+      const zipBuffer = await generateExportFileContent(exportPackage, targetType);
+      res.setHeader('Content-Type', 'application/zip');
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      return res.send(zipBuffer);
+    }
+
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+
+    if (download === false) {
+      return res.json({
+        status: 'success',
+        filename,
+        data: exportPackage
+      });
+    }
+
+    return res.send(JSON.stringify(exportPackage, null, 2));
+  } catch (error) {
+    console.error('[Export Endpoint Error]:', error);
+    res.status(400).json({
+      error: 'ExportPackageConstructionFailed',
+      message: error.message || 'Failed to construct canonical export package.'
+    });
+  }
+});
+
 // MCP Connection checks
 app.get('/api/mcp/health', async (req, res) => {
   if (!validateClickHouseConfig()) {
@@ -377,8 +445,17 @@ app.post('/api/adk-mcp-test', async (req, res) => {
   }
 });
 
+// SPA Fallback Handler for React Frontend Routes
+if (fs.existsSync(clientDistPath)) {
+  app.get('*', (req, res) => {
+    if (!req.path.startsWith('/api') && req.path !== '/health') {
+      res.sendFile(path.join(clientDistPath, 'index.html'));
+    }
+  });
+}
+
 // Start Express gateway listener
-const server = app.listen(PORT, () => {
+const server = app.listen(PORT, '0.0.0.0', () => {
   console.log(`CineAgent Studio backend server running on port ${PORT}`);
   logGeminiConfig();
 });

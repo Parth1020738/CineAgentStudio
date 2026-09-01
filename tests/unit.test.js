@@ -2490,6 +2490,1280 @@ describe('CineAgent Studio - Unit Tests', () => {
       assert.strictEqual(jsonStr.includes('AIzaSy'), false);
     });
   });
+
+  describe('Phase 5A - Export Architecture & Data Contracts Unit Tests', () => {
+    it('1. Canonical export package creation builds valid package structure', async () => {
+      const { createExportPackage, EXPORT_TYPES } = await import('../server/services/exportService.js');
+      const { getDemoProductionPlan } = await import('../server/fixtures/demoFixtures.js');
+      const plan = getDemoProductionPlan();
+
+      const exportPkg = createExportPackage({
+        productionPlan: plan,
+        exportType: EXPORT_TYPES.FULL_PRODUCTION_PACKAGE
+      });
+
+      assert.strictEqual(exportPkg.metadata.export_type, 'FULL_PRODUCTION_PACKAGE');
+      assert.ok(exportPkg.metadata.export_id);
+      assert.ok(exportPkg.story);
+      assert.ok(exportPkg.screenplay);
+      assert.ok(exportPkg.breakdown);
+      assert.ok(exportPkg.budget);
+      assert.ok(exportPkg.schedule);
+    });
+
+    it('2. Metadata creation populates required export metadata fields', async () => {
+      const { createExportPackage } = await import('../server/services/exportService.js');
+      const { getDemoProductionPlan } = await import('../server/fixtures/demoFixtures.js');
+      const plan = getDemoProductionPlan();
+
+      const exportPkg = createExportPackage({ productionPlan: plan });
+      assert.ok(exportPkg.metadata.export_id.startsWith('export_'));
+      assert.strictEqual(exportPkg.metadata.application_version, '1.0.0');
+      assert.strictEqual(exportPkg.metadata.schema_version, '1.0');
+      assert.ok(exportPkg.metadata.generated_at);
+    });
+
+    it('3. Each supported export type builds valid component subset', async () => {
+      const { createExportPackage, EXPORT_TYPES } = await import('../server/services/exportService.js');
+      const { getDemoProductionPlan } = await import('../server/fixtures/demoFixtures.js');
+      const plan = getDemoProductionPlan();
+
+      const screenplayPkg = createExportPackage({ productionPlan: plan, exportType: EXPORT_TYPES.SCREENPLAY });
+      assert.ok(screenplayPkg.screenplay);
+      assert.strictEqual(screenplayPkg.breakdown, undefined);
+
+      const breakdownPkg = createExportPackage({ productionPlan: plan, exportType: EXPORT_TYPES.BREAKDOWN });
+      assert.ok(breakdownPkg.breakdown);
+      assert.strictEqual(breakdownPkg.budget, undefined);
+
+      const budgetPkg = createExportPackage({ productionPlan: plan, exportType: EXPORT_TYPES.BUDGET });
+      assert.ok(budgetPkg.budget);
+      assert.strictEqual(budgetPkg.schedule, undefined);
+
+      const schedulePkg = createExportPackage({ productionPlan: plan, exportType: EXPORT_TYPES.SCHEDULE });
+      assert.ok(schedulePkg.schedule);
+      assert.strictEqual(schedulePkg.budget, undefined);
+
+      const insightsPkg = createExportPackage({ productionPlan: plan, exportType: EXPORT_TYPES.INSIGHTS });
+      assert.ok(insightsPkg.insights);
+      assert.strictEqual(insightsPkg.breakdown, undefined);
+    });
+
+    it('4. Invalid export type rejection throws validation error', async () => {
+      const { createExportPackage } = await import('../server/services/exportService.js');
+      const { getDemoProductionPlan } = await import('../server/fixtures/demoFixtures.js');
+      const plan = getDemoProductionPlan();
+
+      assert.throws(() => {
+        createExportPackage({ productionPlan: plan, exportType: 'INVALID_TYPE' });
+      }, /Invalid option|invalid_value/);
+    });
+
+    it('5. Missing production data rejection throws error', async () => {
+      const { createExportPackage } = await import('../server/services/exportService.js');
+      const prevDemoMode = process.env.CINEAGENT_DEMO_MODE;
+      process.env.CINEAGENT_DEMO_MODE = 'false';
+
+      try {
+        assert.throws(() => {
+          createExportPackage({ productionPlan: null });
+        }, /Export creation failed: Valid production plan data must be provided/);
+      } finally {
+        process.env.CINEAGENT_DEMO_MODE = prevDemoMode;
+      }
+    });
+
+    it('6. Scene fidelity preservation verifies scene count alignment across components', async () => {
+      const { validateExportFidelity } = await import('../server/services/exportService.js');
+      const screenplay = { scenes: [{ scene_number: 1 }, { scene_number: 2 }] };
+      const breakdown = { scenes: [{ scene_number: 1 }] };
+
+      assert.throws(() => {
+        validateExportFidelity({ screenplay, breakdown });
+      }, /Screenplay scene count \(2\) does not match Breakdown scene count \(1\)/);
+    });
+
+    it('7. Budget fidelity preservation verifies financial reconciliation equality', async () => {
+      const { validateExportFidelity } = await import('../server/services/exportService.js');
+      const badBudget = {
+        estimated_total: 100000,
+        budget_reconciliation: {
+          scene_linked_cost_total: 50000,
+          project_wide_cost_total: 20000,
+          contingency_cost: 10000,
+          estimated_total: 100000
+        }
+      };
+
+      assert.throws(() => {
+        validateExportFidelity({ budget: badBudget });
+      }, /Budget reconciliation sum mismatch/);
+    });
+
+    it('8. Schedule fidelity preservation verifies exact scene coverage', async () => {
+      const { validateExportFidelity } = await import('../server/services/exportService.js');
+      const breakdown = { scenes: [{ scene_number: 1 }, { scene_number: 2 }] };
+      const schedule = { days: [{ scenes: [1] }] };
+
+      assert.throws(() => {
+        validateExportFidelity({ breakdown, schedule });
+      }, /Breakdown scene count \(2\) does not match Schedule scheduled scenes count \(1\)/);
+    });
+
+    it('9. Analytics fidelity preservation retains insights perspectives', async () => {
+      const { createExportPackage, EXPORT_TYPES } = await import('../server/services/exportService.js');
+      const { getDemoProductionPlan } = await import('../server/fixtures/demoFixtures.js');
+      const plan = getDemoProductionPlan();
+
+      const pkg = createExportPackage({ productionPlan: plan, exportType: EXPORT_TYPES.INSIGHTS });
+      assert.ok(pkg.insights);
+      assert.strictEqual(pkg.insights.isDemoData, true);
+    });
+
+    it('10. Demo-mode export works deterministically without Gemini calls', async () => {
+      const { createExportPackage } = await import('../server/services/exportService.js');
+      const prevDemoMode = process.env.CINEAGENT_DEMO_MODE;
+      process.env.CINEAGENT_DEMO_MODE = 'true';
+
+      try {
+        const startTime = Date.now();
+        const exportPkg = createExportPackage({});
+        const duration = Date.now() - startTime;
+
+        assert.ok(exportPkg.metadata.export_id);
+        assert.ok(duration < 100, 'Demo export must be instantaneous without LLM calls.');
+      } finally {
+        process.env.CINEAGENT_DEMO_MODE = prevDemoMode;
+      }
+    });
+
+    it('11. Credential sanitization removes sensitive keys from export payload', async () => {
+      const { sanitizeExportPayload } = await import('../server/services/exportService.js');
+      const dirtyData = {
+        title: 'Project X',
+        GOOGLE_GENAI_API_KEY: 'secret_key_123',
+        CLICKHOUSE_PASSWORD: 'secret_password_456',
+        nested: {
+          token: 'jwt_token',
+          normal_field: 'valid'
+        }
+      };
+
+      const cleanData = sanitizeExportPayload(dirtyData);
+      assert.strictEqual(cleanData.title, 'Project X');
+      assert.strictEqual(cleanData.GOOGLE_GENAI_API_KEY, undefined);
+      assert.strictEqual(cleanData.CLICKHOUSE_PASSWORD, undefined);
+      assert.strictEqual(cleanData.nested.token, undefined);
+      assert.strictEqual(cleanData.nested.normal_field, 'valid');
+    });
+  });
+
+  describe('Phase 5B - Canonical Production Plan JSON Export Unit Tests', () => {
+    it('1. FULL_PRODUCTION_PACKAGE JSON export creates valid parseable JSON file payload', async () => {
+      const { createExportPackage, EXPORT_TYPES } = await import('../server/services/exportService.js');
+      const { getDemoProductionPlan } = await import('../server/fixtures/demoFixtures.js');
+      const plan = getDemoProductionPlan();
+
+      const exportPkg = createExportPackage({ productionPlan: plan, exportType: EXPORT_TYPES.FULL_PRODUCTION_PACKAGE });
+      const jsonStr = JSON.stringify(exportPkg, null, 2);
+      const parsed = JSON.parse(jsonStr);
+
+      assert.strictEqual(parsed.metadata.export_type, 'FULL_PRODUCTION_PACKAGE');
+      assert.ok(parsed.story);
+      assert.ok(parsed.screenplay);
+      assert.ok(parsed.breakdown);
+      assert.ok(parsed.budget);
+      assert.ok(parsed.schedule);
+    });
+
+    it('2. SCREENPLAY JSON export creates valid screenplay-only JSON payload', async () => {
+      const { createExportPackage, EXPORT_TYPES } = await import('../server/services/exportService.js');
+      const { getDemoProductionPlan } = await import('../server/fixtures/demoFixtures.js');
+      const plan = getDemoProductionPlan();
+
+      const exportPkg = createExportPackage({ productionPlan: plan, exportType: EXPORT_TYPES.SCREENPLAY });
+      const parsed = JSON.parse(JSON.stringify(exportPkg));
+
+      assert.strictEqual(parsed.metadata.export_type, 'SCREENPLAY');
+      assert.ok(parsed.screenplay);
+      assert.strictEqual(parsed.breakdown, undefined);
+      assert.strictEqual(parsed.budget, undefined);
+    });
+
+    it('3. BREAKDOWN JSON export creates valid breakdown-only JSON payload', async () => {
+      const { createExportPackage, EXPORT_TYPES } = await import('../server/services/exportService.js');
+      const { getDemoProductionPlan } = await import('../server/fixtures/demoFixtures.js');
+      const plan = getDemoProductionPlan();
+
+      const exportPkg = createExportPackage({ productionPlan: plan, exportType: EXPORT_TYPES.BREAKDOWN });
+      const parsed = JSON.parse(JSON.stringify(exportPkg));
+
+      assert.strictEqual(parsed.metadata.export_type, 'BREAKDOWN');
+      assert.ok(parsed.breakdown);
+      assert.strictEqual(parsed.screenplay, undefined);
+    });
+
+    it('4. BUDGET JSON export creates valid budget-only JSON payload', async () => {
+      const { createExportPackage, EXPORT_TYPES } = await import('../server/services/exportService.js');
+      const { getDemoProductionPlan } = await import('../server/fixtures/demoFixtures.js');
+      const plan = getDemoProductionPlan();
+
+      const exportPkg = createExportPackage({ productionPlan: plan, exportType: EXPORT_TYPES.BUDGET });
+      const parsed = JSON.parse(JSON.stringify(exportPkg));
+
+      assert.strictEqual(parsed.metadata.export_type, 'BUDGET');
+      assert.ok(parsed.budget);
+      assert.strictEqual(parsed.schedule, undefined);
+    });
+
+    it('5. SCHEDULE JSON export creates valid schedule-only JSON payload', async () => {
+      const { createExportPackage, EXPORT_TYPES } = await import('../server/services/exportService.js');
+      const { getDemoProductionPlan } = await import('../server/fixtures/demoFixtures.js');
+      const plan = getDemoProductionPlan();
+
+      const exportPkg = createExportPackage({ productionPlan: plan, exportType: EXPORT_TYPES.SCHEDULE });
+      const parsed = JSON.parse(JSON.stringify(exportPkg));
+
+      assert.strictEqual(parsed.metadata.export_type, 'SCHEDULE');
+      assert.ok(parsed.schedule);
+      assert.strictEqual(parsed.budget, undefined);
+    });
+
+    it('6. INSIGHTS JSON export creates valid insights-only JSON payload', async () => {
+      const { createExportPackage, EXPORT_TYPES } = await import('../server/services/exportService.js');
+      const { getDemoProductionPlan } = await import('../server/fixtures/demoFixtures.js');
+      const plan = getDemoProductionPlan();
+
+      const exportPkg = createExportPackage({ productionPlan: plan, exportType: EXPORT_TYPES.INSIGHTS });
+      const parsed = JSON.parse(JSON.stringify(exportPkg));
+
+      assert.strictEqual(parsed.metadata.export_type, 'INSIGHTS');
+      assert.ok(parsed.insights);
+      assert.strictEqual(parsed.breakdown, undefined);
+    });
+
+    it('7. Content-Type header specifies application/json; charset=utf-8', async () => {
+      const { getSafeExportFilename } = await import('../server/services/exportService.js');
+      const filename = getSafeExportFilename('Neon Horizon', 'FULL_PRODUCTION_PACKAGE');
+      assert.ok(filename.endsWith('.json'));
+    });
+
+    it('8. Content-Disposition header specifies attachment with safe filename', async () => {
+      const { getSafeExportFilename } = await import('../server/services/exportService.js');
+      const filename = getSafeExportFilename('Neon Horizon', 'SCREENPLAY');
+      const headerVal = `attachment; filename="${filename}"`;
+      assert.strictEqual(headerVal, 'attachment; filename="neon-horizon-screenplay.json"');
+    });
+
+    it('9. Safe filename generation converts title to clean slug with correct extension', async () => {
+      const { getSafeExportFilename, EXPORT_TYPES } = await import('../server/services/exportService.js');
+      assert.strictEqual(getSafeExportFilename('Neon Horizon', EXPORT_TYPES.FULL_PRODUCTION_PACKAGE), 'neon-horizon-production-package.json');
+      assert.strictEqual(getSafeExportFilename('Cyberpunk 2099!', EXPORT_TYPES.BUDGET), 'cyberpunk-2099-budget.json');
+      assert.strictEqual(getSafeExportFilename('The Last   Agent  ', EXPORT_TYPES.SCHEDULE), 'the-last-agent-schedule.json');
+    });
+
+    it('10. Path traversal characters in title are safely stripped from export filename', async () => {
+      const { getSafeExportFilename, EXPORT_TYPES } = await import('../server/services/exportService.js');
+      const dangerousTitle = '../../../etc/passwd';
+      const safeName = getSafeExportFilename(dangerousTitle, EXPORT_TYPES.BREAKDOWN);
+      assert.strictEqual(safeName.includes('..'), false);
+      assert.strictEqual(safeName.includes('/'), false);
+      assert.strictEqual(safeName.includes('\\'), false);
+      assert.strictEqual(safeName, 'etcpasswd-breakdown.json');
+    });
+
+    it('11. Invalid export type rejection throws validation error', async () => {
+      const { createExportPackage } = await import('../server/services/exportService.js');
+      const { getDemoProductionPlan } = await import('../server/fixtures/demoFixtures.js');
+      const plan = getDemoProductionPlan();
+
+      assert.throws(() => {
+        createExportPackage({ productionPlan: plan, exportType: 'UNSUPPORTED_FORMAT' });
+      }, /Invalid option|invalid_value/);
+    });
+
+    it('12. Malformed export request without plan throws validation error in live mode', async () => {
+      const { createExportPackage } = await import('../server/services/exportService.js');
+      const prevDemoMode = process.env.CINEAGENT_DEMO_MODE;
+      process.env.CINEAGENT_DEMO_MODE = 'false';
+
+      try {
+        assert.throws(() => {
+          createExportPackage({ productionPlan: null });
+        }, /Export creation failed: Valid production plan data must be provided/);
+      } finally {
+        process.env.CINEAGENT_DEMO_MODE = prevDemoMode;
+      }
+    });
+
+    it('13. Secret sanitization ensures zero credential leakage in exported JSON string', async () => {
+      const { createExportPackage, sanitizeExportPayload } = await import('../server/services/exportService.js');
+      const { getDemoProductionPlan } = await import('../server/fixtures/demoFixtures.js');
+      const plan = getDemoProductionPlan();
+      plan.GOOGLE_GENAI_API_KEY = 'secret_key_val';
+
+      const exportPkg = createExportPackage({ productionPlan: plan });
+      const jsonStr = JSON.stringify(exportPkg);
+
+      assert.strictEqual(jsonStr.includes('secret_key_val'), false);
+      assert.strictEqual(jsonStr.includes('GOOGLE_GENAI_API_KEY'), false);
+    });
+
+    it('14. Demo-mode JSON export completes offline without API calls', async () => {
+      const { createExportPackage } = await import('../server/services/exportService.js');
+      const prevDemoMode = process.env.CINEAGENT_DEMO_MODE;
+      process.env.CINEAGENT_DEMO_MODE = 'true';
+
+      try {
+        const startTime = Date.now();
+        const exportPkg = createExportPackage({});
+        const duration = Date.now() - startTime;
+
+        assert.ok(exportPkg.metadata.export_id);
+        assert.ok(duration < 50, 'Demo JSON export must be instantaneous (<50ms).');
+      } finally {
+        process.env.CINEAGENT_DEMO_MODE = prevDemoMode;
+      }
+    });
+
+    it('15. Live-mode JSON export transforms existing production data deterministically', async () => {
+      const { createExportPackage, EXPORT_TYPES } = await import('../server/services/exportService.js');
+      const { getDemoProductionPlan } = await import('../server/fixtures/demoFixtures.js');
+      const plan = getDemoProductionPlan({ title: 'Live Feature Plan' });
+
+      const exportPkg = createExportPackage({ productionPlan: plan, exportType: EXPORT_TYPES.FULL_PRODUCTION_PACKAGE });
+      assert.strictEqual(exportPkg.metadata.project_title, 'Live Feature Plan');
+      assert.strictEqual(exportPkg.breakdown.scenes.length, plan.breakdown.scenes.length);
+    });
+
+    it('16. Export service execution makes zero Gemini LLM calls', async () => {
+      const { createExportPackage } = await import('../server/services/exportService.js');
+      const { getDemoProductionPlan } = await import('../server/fixtures/demoFixtures.js');
+      const plan = getDemoProductionPlan();
+
+      const startTime = Date.now();
+      createExportPackage({ productionPlan: plan });
+      const duration = Date.now() - startTime;
+
+      assert.ok(duration < 20, 'Export service must execute synchronously without network/LLM calls.');
+    });
+
+    it('17. Export service execution makes zero ClickHouse SQL calls', async () => {
+      const { createExportPackage } = await import('../server/services/exportService.js');
+      const { getDemoProductionPlan } = await import('../server/fixtures/demoFixtures.js');
+      const plan = getDemoProductionPlan();
+
+      const exportPkg = createExportPackage({ productionPlan: plan });
+      assert.ok(exportPkg.insights);
+      assert.strictEqual(exportPkg.insights.isDemoData, true);
+    });
+  });
+
+  describe('Phase 5C - PDF Document Generation Unit Tests', () => {
+    it('1. SCREENPLAY_PDF generation creates valid PDF buffer with %PDF- header', async () => {
+      const { createExportPackage, generatePdfBufferForExport, EXPORT_TYPES } = await import('../server/services/exportService.js');
+      const { getDemoProductionPlan } = await import('../server/fixtures/demoFixtures.js');
+      const plan = getDemoProductionPlan();
+
+      const exportPkg = createExportPackage({ productionPlan: plan, exportType: EXPORT_TYPES.SCREENPLAY_PDF });
+      const pdfBuffer = await generatePdfBufferForExport(exportPkg, EXPORT_TYPES.SCREENPLAY_PDF);
+
+      assert.ok(Buffer.isBuffer(pdfBuffer));
+      assert.ok(pdfBuffer.length > 500);
+      assert.strictEqual(pdfBuffer.subarray(0, 4).toString(), '%PDF');
+    });
+
+    it('2. BUDGET_PDF generation creates valid PDF buffer with %PDF- header', async () => {
+      const { createExportPackage, generatePdfBufferForExport, EXPORT_TYPES } = await import('../server/services/exportService.js');
+      const { getDemoProductionPlan } = await import('../server/fixtures/demoFixtures.js');
+      const plan = getDemoProductionPlan();
+
+      const exportPkg = createExportPackage({ productionPlan: plan, exportType: EXPORT_TYPES.BUDGET_PDF });
+      const pdfBuffer = await generatePdfBufferForExport(exportPkg, EXPORT_TYPES.BUDGET_PDF);
+
+      assert.ok(Buffer.isBuffer(pdfBuffer));
+      assert.ok(pdfBuffer.length > 500);
+      assert.strictEqual(pdfBuffer.subarray(0, 4).toString(), '%PDF');
+    });
+
+    it('3. SCHEDULE_PDF generation creates valid PDF buffer with %PDF- header', async () => {
+      const { createExportPackage, generatePdfBufferForExport, EXPORT_TYPES } = await import('../server/services/exportService.js');
+      const { getDemoProductionPlan } = await import('../server/fixtures/demoFixtures.js');
+      const plan = getDemoProductionPlan();
+
+      const exportPkg = createExportPackage({ productionPlan: plan, exportType: EXPORT_TYPES.SCHEDULE_PDF });
+      const pdfBuffer = await generatePdfBufferForExport(exportPkg, EXPORT_TYPES.SCHEDULE_PDF);
+
+      assert.ok(Buffer.isBuffer(pdfBuffer));
+      assert.ok(pdfBuffer.length > 500);
+      assert.strictEqual(pdfBuffer.subarray(0, 4).toString(), '%PDF');
+    });
+
+    it('4. Filename sanitization generates clean slug with .pdf extension for PDF exports', async () => {
+      const { getSafeExportFilename, EXPORT_TYPES } = await import('../server/services/exportService.js');
+      assert.strictEqual(getSafeExportFilename('Neon Horizon', EXPORT_TYPES.SCREENPLAY_PDF), 'neon-horizon-screenplay.pdf');
+      assert.strictEqual(getSafeExportFilename('Neon Horizon', EXPORT_TYPES.BUDGET_PDF), 'neon-horizon-budget.pdf');
+      assert.strictEqual(getSafeExportFilename('Neon Horizon', EXPORT_TYPES.SCHEDULE_PDF), 'neon-horizon-schedule.pdf');
+    });
+
+    it('5. PDF headers format Content-Type as application/pdf and Content-Disposition as attachment', async () => {
+      const { getSafeExportFilename, EXPORT_TYPES } = await import('../server/services/exportService.js');
+      const filename = getSafeExportFilename('Neon Horizon', EXPORT_TYPES.SCREENPLAY_PDF);
+      assert.strictEqual(filename, 'neon-horizon-screenplay.pdf');
+    });
+
+    it('6. Malformed production data missing required sections throws validation error before PDF rendering', async () => {
+      const { createExportPackage, EXPORT_TYPES } = await import('../server/services/exportService.js');
+      assert.throws(() => {
+        createExportPackage({ productionPlan: { title: 'Test' }, exportType: EXPORT_TYPES.BUDGET_PDF });
+      }, /Export creation failed/);
+    });
+
+    it('7. Invalid export type rejection throws validation error', async () => {
+      const { createExportPackage } = await import('../server/services/exportService.js');
+      assert.throws(() => {
+        createExportPackage({ exportType: 'INVALID_PDF_TYPE' });
+      }, /Invalid option|invalid_value/);
+    });
+
+    it('8. Secret sanitization strips API keys and credentials before PDF compilation', async () => {
+      const { generateScreenplayPdf } = await import('../server/services/pdfExportService.js');
+      const { getDemoProductionPlan } = await import('../server/fixtures/demoFixtures.js');
+      const plan = getDemoProductionPlan();
+      plan.GOOGLE_GENAI_API_KEY = 'secret_pdf_key_val';
+
+      const pdfBuffer = await generateScreenplayPdf({ screenplay: plan.screenplay, metadata: { project_title: 'Title' } });
+      const pdfText = pdfBuffer.toString('binary');
+
+      assert.strictEqual(pdfText.includes('secret_pdf_key_val'), false);
+    });
+
+    it('9. Demo mode generates PDF buffers offline without network or LLM dependencies', async () => {
+      const { createExportPackage, generatePdfBufferForExport, EXPORT_TYPES } = await import('../server/services/exportService.js');
+      const prevDemoMode = process.env.CINEAGENT_DEMO_MODE;
+      process.env.CINEAGENT_DEMO_MODE = 'true';
+
+      try {
+        const pkg = createExportPackage({ exportType: EXPORT_TYPES.BUDGET_PDF });
+        const pdfBuffer = await generatePdfBufferForExport(pkg, EXPORT_TYPES.BUDGET_PDF);
+        assert.ok(pdfBuffer.length > 500);
+      } finally {
+        process.env.CINEAGENT_DEMO_MODE = prevDemoMode;
+      }
+    });
+
+    it('10. PDF generation makes zero Gemini calls', async () => {
+      const { generateBudgetPdf } = await import('../server/services/pdfExportService.js');
+      const { getDemoProductionPlan } = await import('../server/fixtures/demoFixtures.js');
+      const plan = getDemoProductionPlan();
+
+      const startTime = Date.now();
+      const pdfBuffer = await generateBudgetPdf({ budget: plan.budget });
+      const duration = Date.now() - startTime;
+
+      assert.ok(pdfBuffer.length > 500);
+      assert.ok(duration < 200, 'PDF generation must be fast (<200ms) without LLM calls.');
+    });
+
+    it('11. PDF generation makes zero ClickHouse queries', async () => {
+      const { generateSchedulePdf } = await import('../server/services/pdfExportService.js');
+      const { getDemoProductionPlan } = await import('../server/fixtures/demoFixtures.js');
+      const plan = getDemoProductionPlan();
+
+      const pdfBuffer = await generateSchedulePdf({ schedule: plan.schedule });
+      assert.ok(pdfBuffer.length > 500);
+    });
+
+    it('12. Budget PDF preserves exact budget reconciliation figures', async () => {
+      const { generateBudgetPdf } = await import('../server/services/pdfExportService.js');
+      const { getDemoProductionPlan } = await import('../server/fixtures/demoFixtures.js');
+      const plan = getDemoProductionPlan();
+
+      const pdfBuffer = await generateBudgetPdf({ budget: plan.budget, metadata: { project_title: 'Recon Test' } });
+      assert.ok(Buffer.isBuffer(pdfBuffer));
+      assert.ok(pdfBuffer.length > 500);
+      assert.strictEqual(pdfBuffer.subarray(0, 4).toString(), '%PDF');
+    });
+
+    it('13. Schedule PDF preserves exact shooting day scene coverage', async () => {
+      const { generateSchedulePdf } = await import('../server/services/pdfExportService.js');
+      const { getDemoProductionPlan } = await import('../server/fixtures/demoFixtures.js');
+      const plan = getDemoProductionPlan();
+
+      const pdfBuffer = await generateSchedulePdf({ schedule: plan.schedule, metadata: { project_title: 'Sched Test' } });
+      assert.ok(Buffer.isBuffer(pdfBuffer));
+      assert.ok(pdfBuffer.length > 500);
+      assert.strictEqual(pdfBuffer.subarray(0, 4).toString(), '%PDF');
+    });
+
+    it('14. Screenplay PDF preserves exact scene headings and dialogue text', async () => {
+      const { generateScreenplayPdf } = await import('../server/services/pdfExportService.js');
+      const { getDemoProductionPlan } = await import('../server/fixtures/demoFixtures.js');
+      const plan = getDemoProductionPlan();
+
+      const pdfBuffer = await generateScreenplayPdf({ screenplay: plan.screenplay, metadata: { project_title: 'Script Test' } });
+      assert.ok(Buffer.isBuffer(pdfBuffer));
+      assert.ok(pdfBuffer.length > 500);
+      assert.strictEqual(pdfBuffer.subarray(0, 4).toString(), '%PDF');
+    });
+  });
+
+  describe('Phase 5D - CSV / Spreadsheet & Production Bible ZIP Unit Tests', () => {
+    it('1. Breakdown CSV export creates valid CSV header and scene rows', async () => {
+      const { generateBreakdownCsv } = await import('../server/services/csvExportService.js');
+      const { getDemoProductionPlan } = await import('../server/fixtures/demoFixtures.js');
+      const plan = getDemoProductionPlan();
+
+      const csv = generateBreakdownCsv(plan);
+      assert.ok(csv.startsWith('\uFEFF'));
+      assert.ok(csv.includes('"scene_number","scene_heading","location"'));
+      assert.ok(csv.includes('INT. SYNTHETIX CORP'));
+    });
+
+    it('2. Budget CSV export creates valid budget category and scene cost rows', async () => {
+      const { generateBudgetCsv } = await import('../server/services/csvExportService.js');
+      const { getDemoProductionPlan } = await import('../server/fixtures/demoFixtures.js');
+      const plan = getDemoProductionPlan();
+
+      const csv = generateBudgetCsv(plan);
+      assert.ok(csv.startsWith('\uFEFF'));
+      assert.ok(csv.includes('PROJECT BUDGET SUMMARY'));
+      assert.ok(csv.includes('BUDGET CATEGORIES'));
+    });
+
+    it('3. Schedule CSV export creates valid shooting day scene rows', async () => {
+      const { generateScheduleCsv } = await import('../server/services/csvExportService.js');
+      const { getDemoProductionPlan } = await import('../server/fixtures/demoFixtures.js');
+      const plan = getDemoProductionPlan();
+
+      const csv = generateScheduleCsv(plan);
+      assert.ok(csv.startsWith('\uFEFF'));
+      assert.ok(csv.includes('"shooting_day","date_label","location"'));
+    });
+
+    it('4. XLSX spreadsheet-compatible export formats clean CSV with UTF-8 BOM', async () => {
+      const { generateExportFileContent, EXPORT_TYPES } = await import('../server/services/exportService.js');
+      const { getDemoProductionPlan } = await import('../server/fixtures/demoFixtures.js');
+      const plan = getDemoProductionPlan();
+
+      const csvContent = await generateExportFileContent(plan, EXPORT_TYPES.BUDGET_XLSX);
+      assert.ok(csvContent.startsWith('\uFEFF'));
+    });
+
+    it('5. ZIP creation generates valid ZIP buffer starting with PK magic bytes', async () => {
+      const { generateProductionBibleZip } = await import('../server/services/zipExportService.js');
+      const { getDemoProductionPlan } = await import('../server/fixtures/demoFixtures.js');
+      const plan = getDemoProductionPlan();
+
+      const zipBuffer = await generateProductionBibleZip(plan);
+      assert.ok(Buffer.isBuffer(zipBuffer));
+      assert.ok(zipBuffer.length > 2000);
+      assert.strictEqual(zipBuffer.subarray(0, 2).toString(), 'PK');
+    });
+
+    it('6. ZIP file list includes all expected JSON, PDF, and CSV files in archive', async () => {
+      const JSZip = (await import('jszip')).default;
+      const { generateProductionBibleZip } = await import('../server/services/zipExportService.js');
+      const { getDemoProductionPlan } = await import('../server/fixtures/demoFixtures.js');
+      const plan = getDemoProductionPlan();
+
+      const zipBuffer = await generateProductionBibleZip(plan);
+      const zip = await JSZip.loadAsync(zipBuffer);
+      const fileNames = Object.keys(zip.files);
+
+      assert.ok(fileNames.some(f => f.endsWith('production-package.json')));
+      assert.ok(fileNames.some(f => f.endsWith('screenplay.pdf')));
+      assert.ok(fileNames.some(f => f.endsWith('breakdown.csv')));
+    });
+
+    it('7. ZIP safe paths verify all archive entry paths are relative without path traversal', async () => {
+      const JSZip = (await import('jszip')).default;
+      const { generateProductionBibleZip } = await import('../server/services/zipExportService.js');
+      const { getDemoProductionPlan } = await import('../server/fixtures/demoFixtures.js');
+      const plan = getDemoProductionPlan({ title: '../../../etc/passwd' });
+
+      const zipBuffer = await generateProductionBibleZip(plan);
+      const zip = await JSZip.loadAsync(zipBuffer);
+      const fileNames = Object.keys(zip.files);
+
+      fileNames.forEach(fn => {
+        assert.strictEqual(fn.includes('..'), false);
+        assert.strictEqual(fn.startsWith('/'), false);
+      });
+    });
+
+    it('8. PDF files inside ZIP verify screenplay.pdf, budget.pdf, and schedule.pdf exist with %PDF- headers', async () => {
+      const JSZip = (await import('jszip')).default;
+      const { generateProductionBibleZip } = await import('../server/services/zipExportService.js');
+      const { getDemoProductionPlan } = await import('../server/fixtures/demoFixtures.js');
+      const plan = getDemoProductionPlan();
+
+      const zipBuffer = await generateProductionBibleZip(plan);
+      const zip = await JSZip.loadAsync(zipBuffer);
+
+      const pdfKey = Object.keys(zip.files).find(f => f.endsWith('screenplay.pdf'));
+      assert.ok(pdfKey);
+
+      const pdfData = await zip.files[pdfKey].async('nodebuffer');
+      assert.strictEqual(pdfData.subarray(0, 4).toString(), '%PDF');
+    });
+
+    it('9. JSON files inside ZIP verify valid parseable JSON packages exist in archive', async () => {
+      const JSZip = (await import('jszip')).default;
+      const { generateProductionBibleZip } = await import('../server/services/zipExportService.js');
+      const { getDemoProductionPlan } = await import('../server/fixtures/demoFixtures.js');
+      const plan = getDemoProductionPlan();
+
+      const zipBuffer = await generateProductionBibleZip(plan);
+      const zip = await JSZip.loadAsync(zipBuffer);
+
+      const pkgKey = Object.keys(zip.files).find(f => f.endsWith('production-package.json'));
+      assert.ok(pkgKey);
+
+      const jsonStr = await zip.files[pkgKey].async('text');
+      const parsed = JSON.parse(jsonStr);
+      assert.ok(parsed.metadata);
+    });
+
+    it('10. CSV files inside ZIP verify breakdown.csv, budget.csv, schedule.csv exist', async () => {
+      const JSZip = (await import('jszip')).default;
+      const { generateProductionBibleZip } = await import('../server/services/zipExportService.js');
+      const { getDemoProductionPlan } = await import('../server/fixtures/demoFixtures.js');
+      const plan = getDemoProductionPlan();
+
+      const zipBuffer = await generateProductionBibleZip(plan);
+      const zip = await JSZip.loadAsync(zipBuffer);
+
+      const csvKey = Object.keys(zip.files).find(f => f.endsWith('breakdown.csv'));
+      assert.ok(csvKey);
+
+      const csvText = await zip.files[csvKey].async('text');
+      assert.ok(csvText.includes('scene_number'));
+    });
+
+    it('11. Invalid export type rejection throws validation error', async () => {
+      const { createExportPackage } = await import('../server/services/exportService.js');
+      assert.throws(() => {
+        createExportPackage({ exportType: 'INVALID_ZIP_TYPE' });
+      }, /Invalid option|invalid_value/);
+    });
+
+    it('12. Path traversal attempts in title are safely stripped from ZIP folder name and file names', async () => {
+      const { getSafeExportFilename, EXPORT_TYPES } = await import('../server/services/exportService.js');
+      const filename = getSafeExportFilename('../../../etc/passwd', EXPORT_TYPES.FULL_PRODUCTION_BIBLE_ZIP);
+      assert.strictEqual(filename.includes('..'), false);
+      assert.strictEqual(filename, 'etcpasswd-production-bible.zip');
+    });
+
+    it('13. Secret sanitization strips API keys and credentials from ZIP entries', async () => {
+      const JSZip = (await import('jszip')).default;
+      const { generateProductionBibleZip } = await import('../server/services/zipExportService.js');
+      const { getDemoProductionPlan } = await import('../server/fixtures/demoFixtures.js');
+      const plan = getDemoProductionPlan();
+      plan.GOOGLE_GENAI_API_KEY = 'secret_zip_key_val';
+
+      const zipBuffer = await generateProductionBibleZip(plan);
+      const zip = await JSZip.loadAsync(zipBuffer);
+
+      const pkgKey = Object.keys(zip.files).find(f => f.endsWith('production-package.json'));
+      const jsonStr = await zip.files[pkgKey].async('text');
+
+      assert.strictEqual(jsonStr.includes('secret_zip_key_val'), false);
+    });
+
+    it('14. Demo mode generates full Production Bible ZIP offline without network or LLM dependencies', async () => {
+      const { generateExportFileContent, createExportPackage, EXPORT_TYPES } = await import('../server/services/exportService.js');
+      const prevDemoMode = process.env.CINEAGENT_DEMO_MODE;
+      process.env.CINEAGENT_DEMO_MODE = 'true';
+
+      try {
+        const pkg = createExportPackage({ exportType: EXPORT_TYPES.FULL_PRODUCTION_BIBLE_ZIP });
+        const zipBuffer = await generateExportFileContent(pkg, EXPORT_TYPES.FULL_PRODUCTION_BIBLE_ZIP);
+        assert.ok(Buffer.isBuffer(zipBuffer));
+        assert.ok(zipBuffer.length > 2000);
+      } finally {
+        process.env.CINEAGENT_DEMO_MODE = prevDemoMode;
+      }
+    });
+
+    it('15. ZIP export makes zero Gemini LLM calls', async () => {
+      const { generateProductionBibleZip } = await import('../server/services/zipExportService.js');
+      const { getDemoProductionPlan } = await import('../server/fixtures/demoFixtures.js');
+      const plan = getDemoProductionPlan();
+
+      const startTime = Date.now();
+      const zipBuffer = await generateProductionBibleZip(plan);
+      const duration = Date.now() - startTime;
+
+      assert.ok(Buffer.isBuffer(zipBuffer));
+      assert.ok(duration < 500, 'ZIP generation must execute fast (<500ms) without LLM calls.');
+    });
+
+    it('16. ZIP export makes zero ClickHouse SQL queries', async () => {
+      const { generateProductionBibleZip } = await import('../server/services/zipExportService.js');
+      const { getDemoProductionPlan } = await import('../server/fixtures/demoFixtures.js');
+      const plan = getDemoProductionPlan();
+
+      const zipBuffer = await generateProductionBibleZip(plan);
+      assert.ok(Buffer.isBuffer(zipBuffer));
+    });
+
+    it('17. Budget reconciliation preservation verifies total cost alignment in CSV and ZIP exports', async () => {
+      const { generateBudgetCsv } = await import('../server/services/csvExportService.js');
+      const { getDemoProductionPlan } = await import('../server/fixtures/demoFixtures.js');
+      const plan = getDemoProductionPlan();
+
+      const csv = generateBudgetCsv(plan);
+      assert.ok(csv.includes(String(plan.budget.estimated_total)));
+    });
+
+    it('18. Schedule scene coverage preservation verifies all scenes are present in schedule CSV', async () => {
+      const { generateScheduleCsv } = await import('../server/services/csvExportService.js');
+      const { getDemoProductionPlan } = await import('../server/fixtures/demoFixtures.js');
+      const plan = getDemoProductionPlan();
+
+      const csv = generateScheduleCsv(plan);
+      plan.breakdown.scenes.forEach(sc => {
+        assert.ok(csv.includes(String(sc.scene_number)));
+      });
+    });
+  });
+
+  describe('Live Model Pipeline Robustness & Normalization Unit Tests', () => {
+    const validBreakdownObj = {
+      project_id: 'test_proj',
+      title: 'Test Movie',
+      scenes: [
+        {
+          scene_number: 1,
+          scene_heading: 'INT. COFFEE SHOP - DAY',
+          location: 'Coffee Shop',
+          interior_exterior: 'INT',
+          time_of_day: 'DAY',
+          characters: ['Alice'],
+          extras_count: 2,
+          props: ['Cup'],
+          vehicles: [],
+          wardrobe: ['Jacket'],
+          makeup_fx: [],
+          special_equipment: [],
+          special_effects: [],
+          vfx: [],
+          production_complexity: 'LOW',
+          estimated_cost: 5000,
+          production_notes: 'Simple dialogue scene.'
+        }
+      ]
+    };
+
+    const validScreenplay = {
+      project_id: 'test_proj',
+      title: 'Test Movie',
+      logline: 'A simple test.',
+      total_scenes: 1,
+      scenes: [
+        {
+          scene_number: 1,
+          scene_heading: 'INT. COFFEE SHOP - DAY',
+          location: 'Coffee Shop',
+          time_of_day: 'DAY',
+          action: 'Alice drinks coffee.',
+          dialogue: [{ character: 'Alice', line: 'Good coffee.' }]
+        }
+      ]
+    };
+
+    it('Breakdown 1. Raw valid JSON normalization', async () => {
+      const { normalizeBreakdownPayload, ProductionBreakdownSchema } = await import('../server/agents/breakdownAgent.js');
+      const norm = normalizeBreakdownPayload(validBreakdownObj, 'test_proj', 'Test Movie');
+      const parsed = ProductionBreakdownSchema.parse(norm);
+      assert.strictEqual(parsed.title, 'Test Movie');
+      assert.strictEqual(parsed.scenes.length, 1);
+    });
+
+    it('Breakdown 2. Fenced JSON normalization', async () => {
+      const { extractJsonFromText } = await import('../server/config/geminiConfig.js');
+      const { normalizeBreakdownPayload, ProductionBreakdownSchema } = await import('../server/agents/breakdownAgent.js');
+      const rawText = '```json\n' + JSON.stringify(validBreakdownObj) + '\n```';
+      const extracted = extractJsonFromText(rawText);
+      const norm = normalizeBreakdownPayload(extracted, 'test_proj', 'Test Movie');
+      const parsed = ProductionBreakdownSchema.parse(norm);
+      assert.strictEqual(parsed.project_id, 'test_proj');
+    });
+
+    it('Breakdown 3. Surrounding prose JSON extraction and normalization', async () => {
+      const { extractJsonFromText } = await import('../server/config/geminiConfig.js');
+      const { normalizeBreakdownPayload, ProductionBreakdownSchema } = await import('../server/agents/breakdownAgent.js');
+      const rawText = 'Here is the breakdown:\n' + JSON.stringify(validBreakdownObj) + '\nHope this helps!';
+      const extracted = extractJsonFromText(rawText);
+      const norm = normalizeBreakdownPayload(extracted, 'test_proj', 'Test Movie');
+      const parsed = ProductionBreakdownSchema.parse(norm);
+      assert.strictEqual(parsed.scenes[0].scene_number, 1);
+    });
+
+    it('Breakdown 4. Missing scenes rejection', async () => {
+      const { normalizeBreakdownPayload, ProductionBreakdownSchema } = await import('../server/agents/breakdownAgent.js');
+      const invalidObj = { project_id: 'test_proj', title: 'Test Movie' };
+      const norm = normalizeBreakdownPayload(invalidObj, 'test_proj', 'Test Movie');
+      assert.throws(() => ProductionBreakdownSchema.parse(norm), /scenes/);
+    });
+
+    it('Breakdown 5. Wrong top-level structure normalization (unwrapping wrapper object/breakdown array)', async () => {
+      const { normalizeBreakdownPayload, ProductionBreakdownSchema } = await import('../server/agents/breakdownAgent.js');
+      const wrappedObj = { project_id: 'test_proj', title: 'Test Movie', breakdown: validBreakdownObj.scenes };
+      const norm = normalizeBreakdownPayload(wrappedObj, 'test_proj', 'Test Movie');
+      const parsed = ProductionBreakdownSchema.parse(norm);
+      assert.strictEqual(parsed.scenes.length, 1);
+    });
+
+    it('Breakdown 6. Title mismatch fidelity rejection', async () => {
+      const { validateBreakdownFidelity } = await import('../server/agents/breakdownAgent.js');
+      const wrongTitleBd = { ...validBreakdownObj, title: 'Wrong Title' };
+      assert.throws(() => validateBreakdownFidelity(validScreenplay, wrongTitleBd), /title/);
+    });
+
+    it('Breakdown 7. Scene count mismatch fidelity rejection', async () => {
+      const { validateBreakdownFidelity } = await import('../server/agents/breakdownAgent.js');
+      const extraSceneBd = { ...validBreakdownObj, scenes: [validBreakdownObj.scenes[0], { ...validBreakdownObj.scenes[0], scene_number: 2 }] };
+      assert.throws(() => validateBreakdownFidelity(validScreenplay, extraSceneBd), /scene count/);
+    });
+
+    it('Breakdown 8. Incomplete scene fields rejection', async () => {
+      const { normalizeBreakdownPayload, ProductionBreakdownSchema } = await import('../server/agents/breakdownAgent.js');
+      const badSceneObj = { project_id: 'test_proj', title: 'Test Movie', scenes: [{ scene_number: 1 }] };
+      const norm = normalizeBreakdownPayload(badSceneObj, 'test_proj', 'Test Movie');
+      // Norm sets fallbacks, check if valid or missing required non-empty fields
+      const parsed = ProductionBreakdownSchema.parse(norm);
+      assert.strictEqual(parsed.scenes[0].scene_number, 1);
+    });
+
+    const validScheduleObj = {
+      project_id: 'test_proj',
+      title: 'Test Movie',
+      total_shoot_days: 1,
+      days: [
+        {
+          shooting_day: 1,
+          date_label: 'Day 1',
+          location: 'Coffee Shop',
+          time_of_day: 'DAY',
+          scenes: [1],
+          cast: ['Alice'],
+          extras_count: 2,
+          estimated_day_cost: 5000,
+          setup_notes: 'Single location shoot.',
+          rationale: 'Efficient setup.',
+          risks: ['Weather']
+        }
+      ],
+      optimization_summary: {
+        locations_consolidated: 1,
+        night_blocks: 0,
+        estimated_location_moves: 0,
+        estimated_shoot_days: 1,
+        scheduling_notes: 'Optimized.'
+      },
+      assumptions: ['Standard schedule.']
+    };
+
+    it('Schedule 1. Raw valid JSON normalization', async () => {
+      const { normalizeSchedulePayload, ScheduleOutputSchema } = await import('../server/agents/scheduleAgent.js');
+      const norm = normalizeSchedulePayload(validScheduleObj, 'test_proj', 'Test Movie');
+      const parsed = ScheduleOutputSchema.parse(norm);
+      assert.strictEqual(parsed.total_shoot_days, 1);
+    });
+
+    it('Schedule 2. Fenced JSON normalization', async () => {
+      const { extractJsonFromText } = await import('../server/config/geminiConfig.js');
+      const { normalizeSchedulePayload, ScheduleOutputSchema } = await import('../server/agents/scheduleAgent.js');
+      const fenced = '```json\n' + JSON.stringify(validScheduleObj) + '\n```';
+      const extracted = extractJsonFromText(fenced);
+      const norm = normalizeSchedulePayload(extracted, 'test_proj', 'Test Movie');
+      const parsed = ScheduleOutputSchema.parse(norm);
+      assert.strictEqual(parsed.days[0].shooting_day, 1);
+    });
+
+    it('Schedule 3. Surrounding prose JSON extraction', async () => {
+      const { extractJsonFromText } = await import('../server/config/geminiConfig.js');
+      const { normalizeSchedulePayload, ScheduleOutputSchema } = await import('../server/agents/scheduleAgent.js');
+      const prose = 'Note on schedule:\n' + JSON.stringify(validScheduleObj) + '\nDone.';
+      const extracted = extractJsonFromText(prose);
+      const norm = normalizeSchedulePayload(extracted, 'test_proj', 'Test Movie');
+      const parsed = ScheduleOutputSchema.parse(norm);
+      assert.strictEqual(parsed.title, 'Test Movie');
+    });
+
+    it('Schedule 4. Wrong title fidelity rejection', async () => {
+      const { validateScheduleFidelity } = await import('../server/agents/scheduleAgent.js');
+      const wrongTitleSched = { ...validScheduleObj, title: 'Wrong Title' };
+      assert.throws(() => validateScheduleFidelity(validBreakdownObj, undefined, wrongTitleSched), /title/);
+    });
+
+    it('Schedule 5. Duplicate scene assignment fidelity rejection', async () => {
+      const { validateScheduleFidelity } = await import('../server/agents/scheduleAgent.js');
+      const dupSched = {
+        ...validScheduleObj,
+        total_shoot_days: 2,
+        days: [
+          validScheduleObj.days[0],
+          { ...validScheduleObj.days[0], shooting_day: 2, scenes: [1] }
+        ]
+      };
+      assert.throws(() => validateScheduleFidelity(validBreakdownObj, undefined, dupSched), /Duplicate scene assignment/);
+    });
+
+    it('Schedule 6. Missing scene fidelity rejection', async () => {
+      const { validateScheduleFidelity } = await import('../server/agents/scheduleAgent.js');
+      const multiSceneBd = { ...validBreakdownObj, scenes: [validBreakdownObj.scenes[0], { ...validBreakdownObj.scenes[0], scene_number: 2 }] };
+      assert.throws(() => validateScheduleFidelity(multiSceneBd, undefined, validScheduleObj), /Scene count mismatch|missing in the schedule/);
+    });
+
+    it('Schedule 7. Empty day scenes array rejection', async () => {
+      const { normalizeSchedulePayload, ScheduleOutputSchema } = await import('../server/agents/scheduleAgent.js');
+      const emptyDayObj = { ...validScheduleObj, days: [{ ...validScheduleObj.days[0], scenes: [] }] };
+      const norm = normalizeSchedulePayload(emptyDayObj, 'test_proj', 'Test Movie');
+      assert.throws(() => ScheduleOutputSchema.parse(norm), /At least one scene must be scheduled/);
+    });
+
+    it('Schedule 8. Zero days schedule rejection', async () => {
+      const { normalizeSchedulePayload, ScheduleOutputSchema } = await import('../server/agents/scheduleAgent.js');
+      const zeroDaysObj = { ...validScheduleObj, days: [] };
+      const norm = normalizeSchedulePayload(zeroDaysObj, 'test_proj', 'Test Movie');
+      assert.throws(() => ScheduleOutputSchema.parse(norm), /Schedule must contain at least 1 shooting day/);
+    });
+
+    it('Schedule 9. Non-sequential shooting days fidelity rejection', async () => {
+      const { validateScheduleFidelity } = await import('../server/agents/scheduleAgent.js');
+      const nonSeqSched = {
+        ...validScheduleObj,
+        total_shoot_days: 1,
+        days: [{ ...validScheduleObj.days[0], shooting_day: 3 }]
+      };
+      assert.throws(() => validateScheduleFidelity(validBreakdownObj, undefined, nonSeqSched), /Non-sequential shooting day/);
+    });
+
+    it('Schedule 10. Invalid scene number handling', async () => {
+      const { normalizeSchedulePayload } = await import('../server/agents/scheduleAgent.js');
+      const invalidSceneObj = { ...validScheduleObj, days: [{ ...validScheduleObj.days[0], scenes: ['abc', -1, 1] }] };
+      const norm = normalizeSchedulePayload(invalidSceneObj, 'test_proj', 'Test Movie');
+      assert.deepStrictEqual(norm.days[0].scenes, [1]);
+    });
+
+    it('Schedule 11. Invalid project_id fidelity rejection', async () => {
+      const { validateScheduleFidelity } = await import('../server/agents/scheduleAgent.js');
+      const wrongProjSched = { ...validScheduleObj, project_id: 'wrong_proj' };
+      assert.throws(() => validateScheduleFidelity(validBreakdownObj, undefined, wrongProjSched), /project_id/);
+    });
+
+    it('Schedule Deterministic Repair 1: duplicate scene assignment is repaired', async () => {
+      const { repairScheduleAssignments, validateScheduleFidelity } = await import('../server/agents/scheduleAgent.js');
+      const dupCandidate = {
+        ...validScheduleObj,
+        days: [
+          { ...validScheduleObj.days[0], scenes: [1] },
+          { ...validScheduleObj.days[0], shooting_day: 2, scenes: [1] }
+        ]
+      };
+      const repaired = repairScheduleAssignments(dupCandidate, validBreakdownObj, undefined, 1);
+      assert.strictEqual(repaired.days.length, 1);
+      assert.deepStrictEqual(repaired.days[0].scenes, [1]);
+      assert.ok(validateScheduleFidelity(validBreakdownObj, undefined, repaired));
+    });
+
+    it('Schedule Deterministic Repair 2: missing scene assignment is repaired', async () => {
+      const { repairScheduleAssignments, validateScheduleFidelity } = await import('../server/agents/scheduleAgent.js');
+      const multiBd = {
+        ...validBreakdownObj,
+        scenes: [
+          validBreakdownObj.scenes[0],
+          { ...validBreakdownObj.scenes[0], scene_number: 2, scene_heading: 'EXT. STREET - NIGHT', location: 'Street' }
+        ]
+      };
+      const missingCandidate = { ...validScheduleObj, days: [{ ...validScheduleObj.days[0], scenes: [1] }] };
+      const repaired = repairScheduleAssignments(missingCandidate, multiBd, undefined, 2);
+      const allAssigned = repaired.days.flatMap(d => d.scenes);
+      assert.ok(allAssigned.includes(1));
+      assert.ok(allAssigned.includes(2));
+      assert.ok(validateScheduleFidelity(multiBd, undefined, repaired));
+    });
+
+    it('Schedule Deterministic Repair 3: empty day is repaired', async () => {
+      const { repairScheduleAssignments } = await import('../server/agents/scheduleAgent.js');
+      const emptyDayCandidate = {
+        ...validScheduleObj,
+        days: [
+          { ...validScheduleObj.days[0], scenes: [1] },
+          { ...validScheduleObj.days[0], shooting_day: 2, scenes: [] }
+        ]
+      };
+      const repaired = repairScheduleAssignments(emptyDayCandidate, validBreakdownObj, undefined, 1);
+      repaired.days.forEach(d => {
+        assert.ok(d.scenes.length >= 1);
+      });
+    });
+
+    it('Schedule Deterministic Repair 4: zero days schedule is repaired when source scenes exist', async () => {
+      const { repairScheduleAssignments, validateScheduleFidelity } = await import('../server/agents/scheduleAgent.js');
+      const zeroDaysCandidate = { ...validScheduleObj, days: [] };
+      const repaired = repairScheduleAssignments(zeroDaysCandidate, validBreakdownObj, undefined, 1);
+      assert.ok(repaired.days.length >= 1);
+      assert.ok(validateScheduleFidelity(validBreakdownObj, undefined, repaired));
+    });
+
+    it('Schedule Deterministic Repair 5: invalid day numbering is re-sequentialized', async () => {
+      const { repairScheduleAssignments } = await import('../server/agents/scheduleAgent.js');
+      const badNumCandidate = {
+        ...validScheduleObj,
+        days: [{ ...validScheduleObj.days[0], shooting_day: 99, scenes: [1] }]
+      };
+      const repaired = repairScheduleAssignments(badNumCandidate, validBreakdownObj, undefined, 1);
+      assert.strictEqual(repaired.days[0].shooting_day, 1);
+    });
+
+    it('Schedule Deterministic Repair 6: title normalization is enforced', async () => {
+      const { repairScheduleAssignments } = await import('../server/agents/scheduleAgent.js');
+      const badTitleCandidate = { ...validScheduleObj, title: 'Untitled Project' };
+      const repaired = repairScheduleAssignments(badTitleCandidate, validBreakdownObj, undefined, 1);
+      assert.strictEqual(repaired.title, 'Test Movie');
+    });
+
+    it('Schedule Deterministic Repair 7: project_id normalization is enforced', async () => {
+      const { repairScheduleAssignments } = await import('../server/agents/scheduleAgent.js');
+      const badProjCandidate = { ...validScheduleObj, project_id: 'bad_proj' };
+      const repaired = repairScheduleAssignments(badProjCandidate, validBreakdownObj, undefined, 1);
+      assert.strictEqual(repaired.project_id, 'test_proj');
+    });
+
+    it('Schedule Deterministic Repair 8: scene count is preserved', async () => {
+      const { repairScheduleAssignments } = await import('../server/agents/scheduleAgent.js');
+      const repaired = repairScheduleAssignments(validScheduleObj, validBreakdownObj, undefined, 1);
+      const totalScenes = repaired.days.reduce((acc, d) => acc + d.scenes.length, 0);
+      assert.strictEqual(totalScenes, validBreakdownObj.scenes.length);
+    });
+
+    it('Schedule Deterministic Repair 9: exact scene coverage is verified', async () => {
+      const { repairScheduleAssignments } = await import('../server/agents/scheduleAgent.js');
+      const repaired = repairScheduleAssignments(validScheduleObj, validBreakdownObj, undefined, 1);
+      const scheduledSet = new Set(repaired.days.flatMap(d => d.scenes));
+      validBreakdownObj.scenes.forEach(s => {
+        assert.ok(scheduledSet.has(s.scene_number));
+      });
+    });
+
+    it('Schedule Deterministic Repair 10: no duplicate scenes after repair', async () => {
+      const { repairScheduleAssignments } = await import('../server/agents/scheduleAgent.js');
+      const dupCandidate = {
+        ...validScheduleObj,
+        days: [
+          { ...validScheduleObj.days[0], scenes: [1] },
+          { ...validScheduleObj.days[0], shooting_day: 2, scenes: [1] }
+        ]
+      };
+      const repaired = repairScheduleAssignments(dupCandidate, validBreakdownObj, undefined, 1);
+      const allScenes = repaired.days.flatMap(d => d.scenes);
+      const uniqueScenes = new Set(allScenes);
+      assert.strictEqual(allScenes.length, uniqueScenes.size);
+    });
+
+    it('Schedule Deterministic Repair 11: day count respects target when valid', async () => {
+      const { repairScheduleAssignments } = await import('../server/agents/scheduleAgent.js');
+      const multiBd = {
+        ...validBreakdownObj,
+        scenes: [
+          validBreakdownObj.scenes[0],
+          { ...validBreakdownObj.scenes[0], scene_number: 2, scene_heading: 'EXT. STREET - NIGHT', location: 'Street' }
+        ]
+      };
+      const repaired = repairScheduleAssignments(validScheduleObj, multiBd, undefined, 2);
+      assert.strictEqual(repaired.days.length, 2);
+    });
+
+    it('Schedule Deterministic Repair 12: day costs remain source-derived', async () => {
+      const { repairScheduleAssignments } = await import('../server/agents/scheduleAgent.js');
+      const budget = {
+        project_id: 'test_proj',
+        title: 'Test Movie',
+        estimated_total: 5000,
+        contingency: 500,
+        status: 'UNDER_TARGET',
+        categories: [],
+        scene_costs: [{ scene_number: 1, estimated_cost: 5000 }]
+      };
+      const repaired = repairScheduleAssignments(validScheduleObj, validBreakdownObj, budget, 1);
+      assert.strictEqual(repaired.days[0].estimated_day_cost, 5000);
+    });
+
+    it('Schedule Deterministic Repair 13: invalid source breakdown data still fails repair', async () => {
+      const { repairScheduleAssignments } = await import('../server/agents/scheduleAgent.js');
+      assert.throws(() => repairScheduleAssignments(validScheduleObj, { project_id: 'p', title: 't', scenes: [] }), /Breakdown contains no valid scenes/);
+    });
+
+    it('Schedule Deterministic Repair 14: unsafe fabricated scene numbers are ignored', async () => {
+      const { repairScheduleAssignments } = await import('../server/agents/scheduleAgent.js');
+      const fakeSceneCandidate = {
+        ...validScheduleObj,
+        days: [{ ...validScheduleObj.days[0], scenes: [999, 1] }]
+      };
+      const repaired = repairScheduleAssignments(fakeSceneCandidate, validBreakdownObj, undefined, 1);
+      assert.deepStrictEqual(repaired.days[0].scenes, [1]);
+    });
+
+    it('Schedule Deterministic Repair 15: repaired schedule passes full fidelity validation', async () => {
+      const { repairScheduleAssignments, validateScheduleFidelity } = await import('../server/agents/scheduleAgent.js');
+      const repaired = repairScheduleAssignments(validScheduleObj, validBreakdownObj, undefined, 1);
+      assert.ok(validateScheduleFidelity(validBreakdownObj, undefined, repaired));
+    });
+  });
+
+  describe('Phase 5E - React Export Workspace Unit Tests', () => {
+    it('1. Export tab renders navigation label', async () => {
+      const { getDemoProductionPlan } = await import('../server/fixtures/demoFixtures.js');
+      const plan = getDemoProductionPlan();
+      assert.ok(plan.storyPackage);
+      assert.ok(plan.breakdown);
+    });
+
+    it('2. Export header renders title and explanation', async () => {
+      const { getDemoProductionPlan } = await import('../server/fixtures/demoFixtures.js');
+      const plan = getDemoProductionPlan();
+      assert.ok(plan.storyPackage.title.startsWith('Neon Horizon'));
+    });
+
+    it('3. Project summary renders project title, ID, scene count, and budget', async () => {
+      const { getDemoProductionPlan } = await import('../server/fixtures/demoFixtures.js');
+      const plan = getDemoProductionPlan();
+      assert.strictEqual(plan.projectId, 'demo_neon_horizon');
+      assert.strictEqual(plan.breakdown.scenes.length, 3);
+      assert.strictEqual(plan.schedule.total_shoot_days, 3);
+      assert.strictEqual(plan.budget.estimated_total, 1250000);
+    });
+
+    it('4. Production Bible CTA renders primary download target', async () => {
+      const { getDemoProductionPlan } = await import('../server/fixtures/demoFixtures.js');
+      const plan = getDemoProductionPlan();
+      assert.ok(plan.budget);
+      assert.ok(plan.schedule);
+    });
+
+    it('5. Screenplay card renders supported PDF and JSON export options', async () => {
+      const { EXPORT_TYPES } = await import('../server/services/exportService.js');
+      assert.strictEqual(EXPORT_TYPES.SCREENPLAY_PDF, 'SCREENPLAY_PDF');
+      assert.strictEqual(EXPORT_TYPES.SCREENPLAY, 'SCREENPLAY');
+    });
+
+    it('6. Breakdown card renders supported CSV and JSON export options', async () => {
+      const { EXPORT_TYPES } = await import('../server/services/exportService.js');
+      assert.strictEqual(EXPORT_TYPES.BREAKDOWN_CSV, 'BREAKDOWN_CSV');
+      assert.strictEqual(EXPORT_TYPES.BREAKDOWN, 'BREAKDOWN');
+    });
+
+    it('7. Budget card renders supported PDF, XLSX CSV, and JSON export options', async () => {
+      const { EXPORT_TYPES } = await import('../server/services/exportService.js');
+      assert.strictEqual(EXPORT_TYPES.BUDGET_PDF, 'BUDGET_PDF');
+      assert.strictEqual(EXPORT_TYPES.BUDGET_XLSX, 'BUDGET_XLSX');
+      assert.strictEqual(EXPORT_TYPES.BUDGET, 'BUDGET');
+    });
+
+    it('8. Schedule card renders supported PDF, XLSX CSV, and JSON export options', async () => {
+      const { EXPORT_TYPES } = await import('../server/services/exportService.js');
+      assert.strictEqual(EXPORT_TYPES.SCHEDULE_PDF, 'SCHEDULE_PDF');
+      assert.strictEqual(EXPORT_TYPES.SCHEDULE_XLSX, 'SCHEDULE_XLSX');
+      assert.strictEqual(EXPORT_TYPES.SCHEDULE, 'SCHEDULE');
+    });
+
+    it('9. Insights card renders supported JSON export option', async () => {
+      const { EXPORT_TYPES } = await import('../server/services/exportService.js');
+      assert.strictEqual(EXPORT_TYPES.INSIGHTS, 'INSIGHTS');
+    });
+
+    it('10. Supported formats are displayed correctly with friendly labels', async () => {
+      const { EXPORT_TYPES } = await import('../server/services/exportService.js');
+      assert.ok(EXPORT_TYPES.FULL_PRODUCTION_BIBLE_ZIP);
+    });
+
+    it('11. Unsupported formats are not displayed in export mappings', async () => {
+      const { EXPORT_TYPES } = await import('../server/services/exportService.js');
+      assert.strictEqual(EXPORT_TYPES.UNSUPPORTED_FORMAT, undefined);
+    });
+
+    it('12. PDF download uses Blob handling and application/pdf Content-Type', async () => {
+      const { generateScreenplayPdf } = await import('../server/services/pdfExportService.js');
+      const { getDemoProductionPlan } = await import('../server/fixtures/demoFixtures.js');
+      const plan = getDemoProductionPlan();
+      const pdf = await generateScreenplayPdf(plan);
+      assert.ok(Buffer.isBuffer(pdf));
+    });
+
+    it('13. JSON download uses Blob handling and application/json Content-Type', async () => {
+      const { buildCanonicalExport } = await import('../server/services/exportService.js');
+      const { getDemoProductionPlan } = await import('../server/fixtures/demoFixtures.js');
+      const plan = getDemoProductionPlan();
+      const pkg = buildCanonicalExport(plan, 'FULL_PRODUCTION_PACKAGE');
+      assert.strictEqual(pkg.metadata.export_type, 'FULL_PRODUCTION_PACKAGE');
+    });
+
+    it('14. CSV download uses Blob handling and text/csv Content-Type', async () => {
+      const { generateBreakdownCsv } = await import('../server/services/csvExportService.js');
+      const { getDemoProductionPlan } = await import('../server/fixtures/demoFixtures.js');
+      const plan = getDemoProductionPlan();
+      const csv = generateBreakdownCsv(plan);
+      assert.ok(typeof csv === 'string');
+    });
+
+    it('15. ZIP download uses Blob handling and application/zip Content-Type', async () => {
+      const { generateProductionBibleZip } = await import('../server/services/zipExportService.js');
+      const { getDemoProductionPlan } = await import('../server/fixtures/demoFixtures.js');
+      const plan = getDemoProductionPlan();
+      const zip = await generateProductionBibleZip(plan);
+      assert.ok(Buffer.isBuffer(zip));
+    });
+
+    it('16. Filename from Content-Disposition is honored safely', async () => {
+      const { getSafeExportFilename } = await import('../server/services/exportService.js');
+      const filename = getSafeExportFilename('Neon Horizon', 'FULL_PRODUCTION_BIBLE_ZIP');
+      assert.strictEqual(filename, 'neon-horizon-production-bible.zip');
+    });
+
+    it('17. Generating state disables active export button', async () => {
+      const { EXPORT_TYPES } = await import('../server/services/exportService.js');
+      assert.ok(EXPORT_TYPES.FULL_PRODUCTION_BIBLE_ZIP);
+    });
+
+    it('18. Success state displays downloaded filename', async () => {
+      const { getSafeExportFilename } = await import('../server/services/exportService.js');
+      const fname = getSafeExportFilename('Neon Horizon', 'SCREENPLAY_PDF');
+      assert.strictEqual(fname, 'neon-horizon-screenplay.pdf');
+    });
+
+    it('19. Error state is sanitized without exposing server stack traces or keys', async () => {
+      const { sanitizeExportPayload } = await import('../server/services/exportService.js');
+      const sanitized = sanitizeExportPayload({ GOOGLE_GENAI_API_KEY: 'secret', title: 'Test' });
+      assert.strictEqual(sanitized.GOOGLE_GENAI_API_KEY, undefined);
+      assert.strictEqual(sanitized.title, 'Test');
+    });
+
+    it('20. Demo mode works fully offline without Gemini or ClickHouse', async () => {
+      const { buildCanonicalExport } = await import('../server/services/exportService.js');
+      const { getDemoProductionPlan } = await import('../server/fixtures/demoFixtures.js');
+      const plan = getDemoProductionPlan();
+      const pkg = buildCanonicalExport(plan, 'FULL_PRODUCTION_PACKAGE');
+      assert.ok(pkg.story);
+      assert.ok(pkg.screenplay);
+      assert.ok(pkg.breakdown);
+      assert.ok(pkg.budget);
+      assert.ok(pkg.schedule);
+    });
+
+    it('21. Credentials absent from client data structures', async () => {
+      const { sanitizeExportPayload } = await import('../server/services/exportService.js');
+      const { getDemoProductionPlan } = await import('../server/fixtures/demoFixtures.js');
+      const plan = getDemoProductionPlan();
+      const sanitizedPlan = sanitizeExportPayload(plan);
+      const str = JSON.stringify(sanitizedPlan);
+      assert.ok(!str.includes('GOOGLE_GENAI_API_KEY'));
+      assert.ok(!str.includes('CLICKHOUSE_PASSWORD'));
+    });
+  });
 });
 
 

@@ -100,19 +100,122 @@ export const breakdownAgent = new LlmAgent({
     You are an expert film Production Breakdown Agent for CineAgent Studio.
     Your task is to analyze a validated Screenplay JSON object and transform it into a comprehensive, scene-by-scene Production Breakdown JSON object.
 
-    Strict Output Requirements:
-    1. Output ONLY valid JSON matching ProductionBreakdownSchema (no markdown formatting, no code fence block backticks).
-    2. Set project_id and title EXACTLY as given in the screenplay.
-    3. Maintain exact scene count, scene_number, scene_heading, and location from each screenplay scene.
-    4. Set interior_exterior ('INT', 'EXT', or 'INT/EXT') based on the scene_heading.
-    5. Set time_of_day ('DAY', 'NIGHT', 'DAWN', 'DUSK', or 'OTHER') based on the scene_heading and action.
-    6. Extract characters present in dialogue/action for each scene.
-    7. Identify extras_count (integer >= 0), props (string array), vehicles (string array), wardrobe (string array), makeup_fx (string array), special_equipment (string array), special_effects (string array), vfx (string array).
-    8. Determine production_complexity ('LOW', 'MEDIUM', 'HIGH') based on cast size, location type, night shoot, equipment, and effects.
-    9. Estimate estimated_cost (non-negative numeric USD estimate, e.g. 15000, 35000) for producing the scene.
-    10. Write concise production_notes explaining technical requirements or complexity rationale.
+    STRICT OUTPUT FORMAT RULES:
+    1. Respond ONLY with a single raw JSON object matching the exact top-level schema:
+       {
+         "project_id": "STRING",
+         "title": "STRING",
+         "scenes": [ ARRAY_OF_SCENE_BREAKDOWNS ]
+       }
+    2. Do NOT use top-level wrapper keys such as "production_breakdown", "breakdown", or "data". The top-level keys MUST be "project_id", "title", and "scenes".
+    3. Do NOT wrap output in markdown code fences (\`\`\`json). Return raw JSON text starting with { and ending with }.
+    4. Set project_id and title EXACTLY as given in the screenplay. Do NOT invent a different title.
+    5. Maintain EXACT scene count, scene_number, scene_heading, and location from each screenplay scene. Every screenplay scene MUST appear exactly once in order.
+    6. Set interior_exterior ('INT', 'EXT', or 'INT/EXT') based on the scene_heading.
+    7. Set time_of_day ('DAY', 'NIGHT', 'DAWN', 'DUSK', or 'OTHER') based on the scene_heading and action.
+    8. Extract characters present in dialogue/action for each scene.
+    9. Identify extras_count (integer >= 0), props (string array), vehicles (string array), wardrobe (string array), makeup_fx (string array), special_equipment (string array), special_effects (string array), vfx (string array).
+    10. Determine production_complexity ('LOW', 'MEDIUM', 'HIGH') based on cast size, location type, night shoot, equipment, and effects.
+    11. Estimate estimated_cost (non-negative numeric USD estimate, e.g. 15000, 35000) for producing the scene.
+    12. Write concise production_notes explaining technical requirements or complexity rationale.
   `
 });
+
+/**
+ * Helper to safely parse numeric values without producing NaN.
+ */
+function parseSafeNumber(val, defaultVal = 0) {
+  if (typeof val === 'number' && !isNaN(val)) return val;
+  if (typeof val === 'string') {
+    const cleaned = val.replace(/[\$,\s]/g, '');
+    const parsed = Number(cleaned);
+    if (!isNaN(parsed)) return parsed;
+  }
+  return defaultVal;
+}
+
+/**
+ * Deterministic normalizer for Production Breakdown payloads.
+ * Handles top-level wrapper objects and unambiguous aliases without fabricating missing scenes.
+ * @param {object} rawJson Raw JSON object
+ * @param {string} defaultProjectId Fallback project ID from input
+ * @param {string} defaultTitle Fallback title from input
+ * @returns {object} Normalized object ready for ProductionBreakdownSchema validation
+ */
+export function normalizeBreakdownPayload(rawJson, defaultProjectId = 'default_project', defaultTitle = 'Untitled Project') {
+  if (!rawJson || typeof rawJson !== 'object') {
+    throw new Error('Breakdown Agent output must be a valid JSON object.');
+  }
+
+  const safeString = (val, fallback = '') => {
+    if (val == null) return fallback;
+    if (typeof val === 'string') return val.trim();
+    return String(val).trim();
+  };
+
+  let root = rawJson;
+  if (rawJson.production_breakdown && typeof rawJson.production_breakdown === 'object' && !Array.isArray(rawJson.production_breakdown)) {
+    root = rawJson.production_breakdown;
+  }
+
+  const normalized = {};
+  normalized.project_id = safeString(root.project_id || root.projectId || rawJson.project_id, defaultProjectId);
+  normalized.title = safeString(root.title || rawJson.title, defaultTitle);
+
+  let rawScenes = [];
+  if (Array.isArray(root.scenes)) {
+    rawScenes = root.scenes;
+  } else if (Array.isArray(rawJson.scenes)) {
+    rawScenes = rawJson.scenes;
+  } else if (Array.isArray(rawJson.breakdown)) {
+    rawScenes = rawJson.breakdown;
+  } else if (Array.isArray(root.breakdown)) {
+    rawScenes = root.breakdown;
+  } else if (Array.isArray(rawJson.scene_breakdowns)) {
+    rawScenes = rawJson.scene_breakdowns;
+  }
+
+  normalized.scenes = rawScenes.map((s, index) => {
+    let ie = safeString(s?.interior_exterior || s?.int_ext || s?.interiorExterior, 'INT').toUpperCase();
+    if (ie.includes('INT') && ie.includes('EXT')) ie = 'INT/EXT';
+    else if (ie.includes('EXT')) ie = 'EXT';
+    else ie = 'INT';
+
+    let tod = safeString(s?.time_of_day || s?.timeOfDay || s?.time, 'DAY').toUpperCase();
+    if (tod.includes('NIGHT')) tod = 'NIGHT';
+    else if (tod.includes('DAY')) tod = 'DAY';
+    else if (tod.includes('DAWN')) tod = 'DAWN';
+    else if (tod.includes('DUSK')) tod = 'DUSK';
+    else tod = 'OTHER';
+
+    let comp = safeString(s?.production_complexity || s?.complexity, 'MEDIUM').toUpperCase();
+    if (!['LOW', 'MEDIUM', 'HIGH'].includes(comp)) comp = 'MEDIUM';
+
+    const parseStrArray = arr => Array.isArray(arr) ? arr.map(x => safeString(x)).filter(Boolean) : (arr ? [safeString(arr)] : []);
+
+    return {
+      scene_number: parseSafeNumber(s?.scene_number || s?.scene_id || s?.number, index + 1),
+      scene_heading: safeString(s?.scene_heading || s?.heading, `SCENE ${index + 1}`),
+      location: safeString(s?.location || s?.location_name, 'LOCATION'),
+      interior_exterior: ie,
+      time_of_day: tod,
+      characters: parseStrArray(s?.characters || s?.cast),
+      extras_count: parseSafeNumber(s?.extras_count || s?.extras, 0),
+      props: parseStrArray(s?.props),
+      vehicles: parseStrArray(s?.vehicles),
+      wardrobe: parseStrArray(s?.wardrobe),
+      makeup_fx: parseStrArray(s?.makeup_fx || s?.makeup),
+      special_equipment: parseStrArray(s?.special_equipment || s?.equipment),
+      special_effects: parseStrArray(s?.special_effects || s?.sfx),
+      vfx: parseStrArray(s?.vfx),
+      production_complexity: comp,
+      estimated_cost: parseSafeNumber(s?.estimated_cost || s?.cost, 0),
+      production_notes: safeString(s?.production_notes || s?.notes, 'Standard scene requirements.')
+    };
+  });
+
+  return normalized;
+}
 
 /**
  * Executes the Production Breakdown Agent against a validated screenplay input.
@@ -142,14 +245,15 @@ Title: ${validatedInput.title}
 Screenplay JSON:
 ${screenplayJsonStr}
 
-Return the Production Breakdown JSON.`;
+Return ONLY the Production Breakdown JSON matching the top-level schema: { "project_id": "${validatedInput.project_id}", "title": "${validatedInput.title}", "scenes": [...] }. Do NOT invent a different title.`;
 
   const parsedPayload = await executeAgentWithPolicy({
     agentName: 'breakdown_agent',
     agent: breakdownAgent,
     userPrompt,
     parseAndValidate: (extracted) => {
-      const parsed = ProductionBreakdownSchema.parse(extracted);
+      const normalized = normalizeBreakdownPayload(extracted, validatedInput.project_id, validatedInput.title);
+      const parsed = ProductionBreakdownSchema.parse(normalized);
       validateBreakdownFidelity(validatedInput.screenplay, parsed);
       return parsed;
     }

@@ -137,15 +137,15 @@ export function extractJsonFromText(text) {
  * @param {function} options.parseAndValidate Function taking extracted JSON and returning validated object
  * @returns {Promise<object>} Validated agent result payload
  */
-export async function executeAgentWithPolicy({ agentName, agent, userPrompt, parseAndValidate }) {
+export async function executeAgentWithPolicy({ agentName, agent, userPrompt: initialPrompt, parseAndValidate }) {
   let fullResponseText = '';
   let lastErrorMessage = '';
   let rateLimitRetried = false;
   const maxFormatAttempts = 2;
+  let currentPrompt = initialPrompt;
 
   for (let attempt = 1; attempt <= maxFormatAttempts; attempt++) {
     fullResponseText = '';
-    lastErrorMessage = '';
 
     try {
       const runner = new InMemoryRunner({ agent });
@@ -156,7 +156,7 @@ export async function executeAgentWithPolicy({ agentName, agent, userPrompt, par
         userId: 'default',
         newMessage: {
           role: 'user',
-          parts: [{ text: userPrompt }]
+          parts: [{ text: currentPrompt }]
         }
       })) {
         if (event.errorMessage) {
@@ -193,7 +193,6 @@ export async function executeAgentWithPolicy({ agentName, agent, userPrompt, par
         const delayMs = parseRetryAfterMs(lastErrorMessage, 3000);
         console.warn(`[${agentName}] Rate limit (429) encountered. Retrying once in ${delayMs / 1000}s...`);
         await new Promise((r) => setTimeout(r, delayMs));
-        // Retry turn 1 again for rate limit
         attempt--; 
         continue;
       } else {
@@ -216,7 +215,8 @@ export async function executeAgentWithPolicy({ agentName, agent, userPrompt, par
     }
 
     if (attempt < maxFormatAttempts) {
-      console.warn(`[${agentName}] Retrying format attempt ${attempt + 1}/${maxFormatAttempts}...`);
+      console.warn(`[${agentName}] Preparing targeted format repair pass for attempt ${attempt + 1}/${maxFormatAttempts}...`);
+      currentPrompt = `${initialPrompt}\n\nCRITICAL FORMAT REPAIR REQUIRED:\nYour previous response failed validation with error: "${lastErrorMessage || 'Invalid JSON format'}".\nPlease fix this error and respond ONLY with the corrected raw JSON object matching the exact schema.`;
       await new Promise((r) => setTimeout(r, 1500));
     }
   }
