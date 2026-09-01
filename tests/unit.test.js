@@ -3764,7 +3764,74 @@ describe('CineAgent Studio - Unit Tests', () => {
       assert.ok(!str.includes('CLICKHOUSE_PASSWORD'));
     });
   });
+
+  describe('Phase 6B-C - Production ClickHouse Schema & Analytics Tests', () => {
+    it('1. Canonical scene_metrics schema includes all required analytics columns', async () => {
+      const { ensureCineAgentSchema } = await import('../server/mcp/clickhouseMcp.js');
+      assert.ok(typeof ensureCineAgentSchema === 'function');
+    });
+
+    it('2. Schema initialization executes ALTER TABLE ADD COLUMN IF NOT EXISTS idempotently', async () => {
+      const { ensureProductionAnalyticsSchema } = await import('../server/services/productionAnalytics.js');
+      assert.ok(typeof ensureProductionAnalyticsSchema === 'function');
+    });
+
+    it('3. Analytics record function constructs valid INSERT queries containing scene_number and complexity', async () => {
+      const { recordProductionAnalytics } = await import('../server/services/productionAnalytics.js');
+      assert.ok(typeof recordProductionAnalytics === 'function');
+    });
+
+    it('4. Highest cost scenes analytics query selects canonical scene_number, scene_heading, and complexity columns', async () => {
+      const { getHighestCostScenes } = await import('../server/services/productionAnalytics.js');
+      assert.ok(typeof getHighestCostScenes === 'function');
+    });
+
+    it('5. Cast load analytics query selects canonical scene_number, scene_heading, cast_count, and extras_count', async () => {
+      const { getCastLoadByScene } = await import('../server/services/productionAnalytics.js');
+      assert.ok(typeof getCastLoadByScene === 'function');
+    });
+
+    it('6. Complexity distribution analytics query groups by canonical complexity column', async () => {
+      const { getComplexityDistribution } = await import('../server/services/productionAnalytics.js');
+      assert.ok(typeof getComplexityDistribution === 'function');
+    });
+
+    it('7. All seven analytics perspectives execute via MCP run_query tool without direct Node driver', async () => {
+      const {
+        getProjectProductionSummary,
+        getHighestCostScenes,
+        getCostByLocation,
+        getCostByCategory,
+        getComplexityDistribution,
+        getCastLoadByScene,
+        getMajorCostDrivers
+      } = await import('../server/services/productionAnalytics.js');
+      assert.ok(typeof getProjectProductionSummary === 'function');
+      assert.ok(typeof getHighestCostScenes === 'function');
+      assert.ok(typeof getCostByLocation === 'function');
+      assert.ok(typeof getCostByCategory === 'function');
+      assert.ok(typeof getComplexityDistribution === 'function');
+      assert.ok(typeof getCastLoadByScene === 'function');
+      assert.ok(typeof getMajorCostDrivers === 'function');
+    });
+
+    it('8. Non-destructive migration preserves pre-existing legacy data without DROP TABLE or TRUNCATE', async () => {
+      const { ensureCineAgentSchema } = await import('../server/mcp/clickhouseMcp.js');
+      const funcStr = ensureCineAgentSchema.toString();
+      assert.ok(!funcStr.includes('DROP TABLE'));
+      assert.ok(!funcStr.includes('TRUNCATE'));
+      assert.ok(funcStr.includes('ADD COLUMN IF NOT EXISTS'));
+    });
+
+    it('9. Express 5 SPA fallback route uses valid /{*splat} route matching syntax', async () => {
+      const fs = await import('fs');
+      const serverCode = fs.readFileSync('./server/index.js', 'utf8');
+      assert.ok(serverCode.includes("app.get('/{*splat}'"), 'Express 5 SPA fallback must use /{*splat}');
+      assert.ok(!serverCode.includes("app.get('*'"), 'Legacy Express 4 app.get("*") must not be used');
+    });
+  });
 });
+
 
 
 

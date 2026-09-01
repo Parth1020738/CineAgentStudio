@@ -68,6 +68,24 @@ export async function ensureProductionAnalyticsSchema() {
   for (const query of ddlQueries) {
     await executeMcpQuery(query);
   }
+
+  // Idempotent column migrations for pre-existing legacy scene_metrics tables
+  const alterColumns = [
+    'ALTER TABLE scene_metrics ADD COLUMN IF NOT EXISTS scene_number UInt16',
+    'ALTER TABLE scene_metrics ADD COLUMN IF NOT EXISTS scene_heading String',
+    'ALTER TABLE scene_metrics ADD COLUMN IF NOT EXISTS interior_exterior String',
+    'ALTER TABLE scene_metrics ADD COLUMN IF NOT EXISTS time_of_day String',
+    'ALTER TABLE scene_metrics ADD COLUMN IF NOT EXISTS extras_count UInt16',
+    'ALTER TABLE scene_metrics ADD COLUMN IF NOT EXISTS complexity String'
+  ];
+
+  for (const alterQuery of alterColumns) {
+    try {
+      await executeMcpQuery(alterQuery);
+    } catch (err) {
+      console.warn(`[Analytics Schema Migration] ${alterQuery}: ${err.message}`);
+    }
+  }
 }
 
 /**

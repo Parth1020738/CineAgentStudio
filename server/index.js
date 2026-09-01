@@ -445,9 +445,9 @@ app.post('/api/adk-mcp-test', async (req, res) => {
   }
 });
 
-// SPA Fallback Handler for React Frontend Routes
+// SPA Fallback Handler for React Frontend Routes (Express 5 compatible)
 if (fs.existsSync(clientDistPath)) {
-  app.get('*', (req, res) => {
+  app.get('/{*splat}', (req, res) => {
     if (!req.path.startsWith('/api') && req.path !== '/health') {
       res.sendFile(path.join(clientDistPath, 'index.html'));
     }

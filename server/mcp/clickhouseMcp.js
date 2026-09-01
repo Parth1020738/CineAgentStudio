@@ -139,7 +139,7 @@ export async function executeMcpQuery(query) {
 
 /**
  * Ensures the CineAgent schema tables exist in ClickHouse Cloud via MCP run_query.
- * Creates agent_runs and scene_metrics tables if they do not exist.
+ * Creates agent_runs and canonical scene_metrics tables and executes idempotent column migrations.
  */
 export async function ensureCineAgentSchema() {
   const createAgentRunsDdl = `
@@ -157,16 +157,40 @@ export async function ensureCineAgentSchema() {
     CREATE TABLE IF NOT EXISTS scene_metrics (
         project_id String,
         scene_id String,
+        scene_number UInt16,
+        scene_heading String,
         location String,
+        interior_exterior String,
+        time_of_day String,
         cast_count UInt16,
+        extras_count UInt16,
+        complexity String,
         estimated_cost Float64,
         shooting_day UInt16,
         created_at DateTime DEFAULT now()
-    ) ENGINE = MergeTree() ORDER BY (project_id, scene_id)
+    ) ENGINE = MergeTree() ORDER BY (project_id, scene_number)
   `;
 
   await executeMcpQuery(createAgentRunsDdl);
   await executeMcpQuery(createSceneMetricsDdl);
+
+  // Idempotent column migrations for pre-existing legacy scene_metrics tables
+  const alterColumns = [
+    'ALTER TABLE scene_metrics ADD COLUMN IF NOT EXISTS scene_number UInt16',
+    'ALTER TABLE scene_metrics ADD COLUMN IF NOT EXISTS scene_heading String',
+    'ALTER TABLE scene_metrics ADD COLUMN IF NOT EXISTS interior_exterior String',
+    'ALTER TABLE scene_metrics ADD COLUMN IF NOT EXISTS time_of_day String',
+    'ALTER TABLE scene_metrics ADD COLUMN IF NOT EXISTS extras_count UInt16',
+    'ALTER TABLE scene_metrics ADD COLUMN IF NOT EXISTS complexity String'
+  ];
+
+  for (const alterQuery of alterColumns) {
+    try {
+      await executeMcpQuery(alterQuery);
+    } catch (err) {
+      console.warn(`[ClickHouse MCP Schema Migration] ${alterQuery}: ${err.message}`);
+    }
+  }
 }
 
 /**
