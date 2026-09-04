@@ -138,6 +138,10 @@ export function extractJsonFromText(text) {
  * @returns {Promise<object>} Validated agent result payload
  */
 export async function executeAgentWithPolicy({ agentName, agent, userPrompt: initialPrompt, parseAndValidate }) {
+  if (!agent) {
+    throw new Error('agent must be provided in runner constructor (or via app.rootAgent)');
+  }
+
   let fullResponseText = '';
   let lastErrorMessage = '';
   let rateLimitRetried = false;

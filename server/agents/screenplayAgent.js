@@ -16,6 +16,7 @@ export const ScreenplayInputSchema = z.object({
   logline: z.string().trim().min(1, 'Logline cannot be empty.'),
   genre: z.string().optional(),
   tone: z.string().optional(),
+  screenplayDetail: z.enum(['concise', 'cinematic', 'highly_detailed']).optional().default('cinematic'),
   synopsis: z.string().trim().min(1, 'Synopsis cannot be empty.'),
   three_act_structure: z.object({
     act1: z.string(),
@@ -160,7 +161,13 @@ export const screenplayAgent = new LlmAgent({
   model: getGeminiModel(),
   instruction: `
     You are an expert Screenplay Agent for CineAgent Studio.
-    Your task is to transform structured story input into a concise, production-ready screenplay draft containing EXACTLY 2 to 3 key scenes.
+    Your task is to transform structured story input into a highly cinematic, production-ready screenplay draft containing EXACTLY 2 to 3 key scenes.
+
+    CINEMATIC WRITING INSTRUCTIONS:
+    1. Strong Visual Action: Every scene action block must provide vivid environmental atmosphere, sensory lighting, camera framing, and clear physical beats.
+    2. Conflict & Subtext: Characters must speak with distinct voices, clear scene objectives, dramatic subtext, and emotional tension.
+    3. Cinematic Pacing: Include visual action beats between dialogue lines to guide dramatic beats, props, and blocking.
+    4. Continuity & Resolution: Build organic narrative momentum across sequential scenes, ending each scene on a clear visual button.
 
     STRICT OUTPUT CONTRACT:
     Output MUST be a single valid, parseable raw JSON object matching this schema:
@@ -231,6 +238,21 @@ export async function runScreenplayAgent(inputs) {
   const runId = `run_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
   const validatedInputs = ScreenplayInputSchema.parse(inputs);
   const projectId = validatedInputs.projectId || (validatedInputs.title ? validatedInputs.title.toLowerCase().replace(/[^a-z0-9]/g, '_') : 'default_project');
+  const detailMode = validatedInputs.screenplayDetail || 'cinematic';
+
+  const DETAIL_INSTRUCTIONS = {
+    concise: `DETAIL MODE: CONCISE
+- Focus on sharp, lean visual action blocks and direct, essential dialogue exchanges.
+- Keep scene setup swift and momentum high without sacrificing physical clarity.`,
+    cinematic: `DETAIL MODE: CINEMATIC (RECOMMENDED)
+- Write rich, visually evocative action blocks with vivid environmental atmosphere, sensory lighting, and cinematic framing.
+- Craft dialogue with distinct subtext, emotional tension, character objectives, and clear visual action beats.
+- Ensure every scene has a compelling opening hook, escalating conflict/tension, emotional progression, and an impactful ending beat.`,
+    highly_detailed: `DETAIL MODE: HIGHLY DETAILED
+- Write deeply elaborate action blocks with rich sensory atmosphere, nuanced character gestures, camera-ready movement, and atmospheric depth.
+- Develop multi-beat dialogue exchanges with layered subtext, micro-tensions, and distinct character voices.
+- Build immersive cinematic pacing, detailed prop interactions, and impactful narrative momentum across scenes.`
+  };
 
   const charactersFormatted = validatedInputs.characters.map(c => `- ${c.name} (${c.role}): ${c.description}`).join('\n');
   const threeActFormatted = validatedInputs.three_act_structure 
@@ -238,6 +260,8 @@ export async function runScreenplayAgent(inputs) {
     : 'N/A';
 
   const userPrompt = `Generate a 2-3 scene screenplay draft for the project "${projectId}" titled "${validatedInputs.title}".
+
+${DETAIL_INSTRUCTIONS[detailMode] || DETAIL_INSTRUCTIONS.cinematic}
 
 Story Metadata:
 Logline: ${validatedInputs.logline}

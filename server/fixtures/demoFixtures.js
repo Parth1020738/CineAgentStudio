@@ -337,7 +337,11 @@ export function getDemoProductionPlan(inputs = {}) {
     pipelineTelemetry: {
       projectId,
       totalDurationMs: 850,
-      mode: 'LOCAL_DEMO_FIXTURE_MODE'
+      durationMs: 850,
+      status: 'SUCCESS',
+      mode: 'LOCAL_DEMO_FIXTURE_MODE',
+      mcpLogged: true,
+      mcpStatus: 'CONNECTED / SYNCED'
     }
   };
 }

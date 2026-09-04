@@ -5,6 +5,8 @@ import BudgetView from './components/BudgetView.jsx';
 import ScheduleView from './components/ScheduleView.jsx';
 import ProductionInsightsView from './components/ProductionInsightsView.jsx';
 import ExportView from './components/ExportView.jsx';
+import ScriptDoctorView from './components/ScriptDoctorView.jsx';
+import WhatIfView from './components/WhatIfView.jsx';
 
 export default function App() {
   const [formData, setFormData] = useState({
@@ -14,6 +16,7 @@ export default function App() {
     tone: 'Neo-Noir, Gritty',
     targetBudget: '5000000',
     targetShootDays: '3',
+    screenplayDetail: 'cinematic',
     projectId: ''
   });
 
@@ -37,8 +40,8 @@ export default function App() {
     pipelineTelemetry: null
   });
 
-  // Navigation tab states
-  const [mainTab, setMainTab] = useState('story'); // 'story' | 'screenplay' | 'production_planning'
+  // Navigation tab states: 'concept' | 'story' | 'screenplay' | 'production' | 'script_doctor' | 'what_if' | 'export'
+  const [mainTab, setMainTab] = useState('concept');
   const [planningSubTab, setPlanningSubTab] = useState('breakdown'); // 'breakdown' | 'budget' | 'schedule' | 'insights'
 
   const [systemHealth, setSystemHealth] = useState({
@@ -195,8 +198,7 @@ export default function App() {
         pipelineTelemetry: resData.data.pipelineTelemetry
       });
 
-      // Default to Production Planning tab for immediate visual feedback
-      setMainTab('production_planning');
+      setMainTab('production');
       setPlanningSubTab('breakdown');
     } catch (err) {
       clearTimeout(t1);
@@ -283,7 +285,7 @@ export default function App() {
         pipelineTelemetry: resData.data.pipelineTelemetry
       });
 
-      setMainTab('story');
+      setMainTab('screenplay');
     } catch (err) {
       setPipelineState({
         loading: false,
@@ -296,15 +298,86 @@ export default function App() {
     }
   };
 
+  // Compute Pipeline Stage Indicators
+  const getStageIndicator = (stageKey) => {
+    if (pipelineState.stage === 'error') {
+      if (
+        (stageKey === 'concept' && !formData.title) ||
+        (stageKey === 'story' && pipelineState.stage === 'error')
+      ) {
+        return { symbol: '⚠', text: 'Error', className: 'stage-error' };
+      }
+    }
+
+    if (stageKey === 'concept') {
+      return resultData.storyPackage || formData.title
+        ? { symbol: '✓', text: 'Complete', className: 'stage-complete' }
+        : { symbol: '●', text: 'Active', className: 'stage-active' };
+    }
+
+    if (stageKey === 'story') {
+      if (resultData.storyPackage) return { symbol: '✓', text: 'Complete', className: 'stage-complete' };
+      if (pipelineState.loading && pipelineState.stage === 'story_agent')
+        return { symbol: '●', text: 'In Progress', className: 'stage-active' };
+      return { symbol: '○', text: 'Not Started', className: 'stage-idle' };
+    }
+
+    if (stageKey === 'screenplay') {
+      if (resultData.screenplay) return { symbol: '✓', text: 'Complete', className: 'stage-complete' };
+      if (pipelineState.loading && pipelineState.stage === 'screenplay_agent')
+        return { symbol: '●', text: 'In Progress', className: 'stage-active' };
+      return { symbol: '○', text: 'Not Started', className: 'stage-idle' };
+    }
+
+    if (stageKey === 'breakdown') {
+      if (resultData.breakdown) return { symbol: '✓', text: 'Complete', className: 'stage-complete' };
+      if (pipelineState.loading && pipelineState.stage === 'breakdown_agent')
+        return { symbol: '●', text: 'In Progress', className: 'stage-active' };
+      return { symbol: '○', text: 'Not Started', className: 'stage-idle' };
+    }
+
+    if (stageKey === 'budget') {
+      if (resultData.budget) return { symbol: '✓', text: 'Complete', className: 'stage-complete' };
+      if (pipelineState.loading && pipelineState.stage === 'budget_agent')
+        return { symbol: '●', text: 'In Progress', className: 'stage-active' };
+      return { symbol: '○', text: 'Not Started', className: 'stage-idle' };
+    }
+
+    if (stageKey === 'schedule') {
+      if (resultData.schedule) return { symbol: '✓', text: 'Complete', className: 'stage-complete' };
+      if (pipelineState.loading && pipelineState.stage === 'schedule_agent')
+        return { symbol: '●', text: 'In Progress', className: 'stage-active' };
+      return { symbol: '○', text: 'Not Started', className: 'stage-idle' };
+    }
+
+    if (stageKey === 'insights') {
+      if (resultData.productionInsights) return { symbol: '✓', text: 'Complete', className: 'stage-complete' };
+      if (pipelineState.stage === 'complete') return { symbol: '✓', text: 'Complete', className: 'stage-complete' };
+      return { symbol: '○', text: 'Not Started', className: 'stage-idle' };
+    }
+
+    return { symbol: '○', text: 'Not Started', className: 'stage-idle' };
+  };
+
+  const hasPlan = Boolean(resultData.storyPackage || resultData.screenplay);
+  const formattedBudget = resultData.budget?.estimated_total
+    ? `$${(resultData.budget.estimated_total / 1000000).toFixed(1)}M`
+    : resultData.budget?.target_budget
+    ? `$${(resultData.budget.target_budget / 1000000).toFixed(1)}M`
+    : `$${(Number(formData.targetBudget) / 1000000).toFixed(1)}M`;
+  const shootDaysCount = resultData.schedule?.total_shoot_days || formData.targetShootDays || 3;
+  const sceneCount = resultData.breakdown?.scenes?.length || resultData.screenplay?.scenes?.length || 0;
+  const locationCount = resultData.breakdown?.locations?.length || (resultData.breakdown?.scenes ? new Set(resultData.breakdown.scenes.map(s => s.location).filter(Boolean)).size : 0);
+
   return (
     <div className="app-container">
-      {/* Studio Header */}
+      {/* Top Header & System Health Bar */}
       <header className="studio-header">
         <div className="header-brand">
           <div className="clapper-icon">🎬</div>
           <div>
             <h1>CINEAGENT STUDIO</h1>
-            <p className="tagline">Autonomous Multi-Agent AI Film Pre-Production & Planning Platform</p>
+            <p className="tagline">AI Film Production Command Center</p>
           </div>
         </div>
 
@@ -326,142 +399,133 @@ export default function App() {
         </div>
       </header>
 
-      <main className="main-content">
-        {/* Film Concept Intake Panel */}
-        <section className="card form-card">
-          <div className="card-header">
-            <h2>1. Film Concept Intake</h2>
-            <span className="badge">Studio Production Desk</span>
+      {/* Persistent Project Header (Visible when plan exists) */}
+      {hasPlan && (
+        <section className="card project-header-card" aria-label="Persistent Project Header">
+          <div className="p-header-top">
+            <div className="p-title-group">
+              <h2 className="p-title">{resultData.storyPackage?.title || formData.title}</h2>
+              <p className="p-meta">{resultData.storyPackage?.genre || formData.genre} • {formData.tone}</p>
+            </div>
+            <div className="p-metrics-strip">
+              <div className="p-metric-item">
+                <span className="pm-label">BUDGET</span>
+                <span className="pm-val highlight-gold">{formattedBudget}</span>
+              </div>
+              <div className="p-metric-item">
+                <span className="pm-label">SHOOT DAYS</span>
+                <span className="pm-val text-blue">{shootDaysCount} Days</span>
+              </div>
+              <div className="p-metric-item">
+                <span className="pm-label">SCENES</span>
+                <span className="pm-val">{sceneCount} Scenes</span>
+              </div>
+              <div className="p-metric-item">
+                <span className="pm-label">LOCATIONS</span>
+                <span className="pm-val">{locationCount} Locations</span>
+              </div>
+            </div>
           </div>
-
-          <form className="concept-form">
-            <div className="form-row">
-              <div className="form-group flex-2">
-                <label>Film Title <span className="req">*</span></label>
-                <input
-                  type="text"
-                  name="title"
-                  value={formData.title}
-                  onChange={handleInputChange}
-                  placeholder="e.g., Neon Horizon"
-                  disabled={pipelineState.loading}
-                  required
-                />
-              </div>
-
-              <div className="form-group flex-1">
-                <label>Genre <span className="req">*</span></label>
-                <input
-                  type="text"
-                  name="genre"
-                  value={formData.genre}
-                  onChange={handleInputChange}
-                  placeholder="e.g., Sci-Fi Cyberpunk"
-                  disabled={pipelineState.loading}
-                  required
-                />
-              </div>
-            </div>
-
-            <div className="form-group">
-              <label>Logline Concept <span className="req">*</span></label>
-              <textarea
-                name="logline"
-                value={formData.logline}
-                onChange={handleInputChange}
-                rows={2}
-                placeholder="A high-concept one-sentence summary of your film."
-                disabled={pipelineState.loading}
-                required
-              />
-            </div>
-
-            <div className="form-row">
-              <div className="form-group flex-1">
-                <label>Tone / Visual Style</label>
-                <input
-                  type="text"
-                  name="tone"
-                  value={formData.tone}
-                  onChange={handleInputChange}
-                  placeholder="e.g., Neo-Noir, Gritty, Atmospheric"
-                  disabled={pipelineState.loading}
-                />
-              </div>
-
-              <div className="form-group flex-1">
-                <label>Target Budget ($)</label>
-                <input
-                  type="number"
-                  name="targetBudget"
-                  value={formData.targetBudget}
-                  onChange={handleInputChange}
-                  placeholder="e.g., 5000000"
-                  disabled={pipelineState.loading}
-                />
-              </div>
-
-              <div className="form-group flex-1">
-                <label>Target Shoot Days</label>
-                <input
-                  type="number"
-                  name="targetShootDays"
-                  value={formData.targetShootDays}
-                  onChange={handleInputChange}
-                  placeholder="e.g., 3"
-                  disabled={pipelineState.loading}
-                />
-              </div>
-
-              <div className="form-group flex-1">
-                <label>Project ID (Optional)</label>
-                <input
-                  type="text"
-                  name="projectId"
-                  value={formData.projectId}
-                  onChange={handleInputChange}
-                  placeholder="auto-generated if empty"
-                  disabled={pipelineState.loading}
-                />
-              </div>
-            </div>
-
-            {/* Action Buttons */}
-            <div className="actions-bar">
-              <button
-                type="button"
-                className="submit-btn primary-plan-btn"
-                onClick={handleGenerateProductionPlan}
-                disabled={pipelineState.loading}
-              >
-                {pipelineState.loading && pipelineState.pipelineMode === 'full' ? (
-                  <>
-                    <span className="spinner"></span> Executing 5-Agent Production Pipeline...
-                  </>
-                ) : (
-                  '🚀 Generate Full Production Plan (Breakdown + Budget + Schedule)'
-                )}
-              </button>
-
-              <button
-                type="button"
-                className="secondary-btn"
-                onClick={handleGenerateStoryScreenplay}
-                disabled={pipelineState.loading}
-              >
-                {pipelineState.loading && pipelineState.pipelineMode === 'screenplay_only' ? (
-                  <>
-                    <span className="spinner"></span> Generating Draft...
-                  </>
-                ) : (
-                  '📜 Draft Story & Screenplay Only'
-                )}
-              </button>
-            </div>
-          </form>
+          <p className="p-logline">"{resultData.storyPackage?.logline || formData.logline}"</p>
         </section>
+      )}
 
-        {/* Pipeline Execution Progress */}
+      {/* Visual Pipeline Status Indicator */}
+      <section className="card pipeline-status-card" aria-label="Production Pipeline Status">
+        <div className="pipeline-status-header">
+          <h3>PRODUCTION PIPELINE STATUS</h3>
+          {pipelineState.loading && (
+            <span className="pipeline-running-badge">● Pipeline Running</span>
+          )}
+        </div>
+        <div className="pipeline-flow-bar">
+          {[
+            { key: 'concept', label: 'CONCEPT' },
+            { key: 'story', label: 'STORY' },
+            { key: 'screenplay', label: 'SCREENPLAY' },
+            { key: 'breakdown', label: 'BREAKDOWN' },
+            { key: 'budget', label: 'BUDGET' },
+            { key: 'schedule', label: 'SCHEDULE' },
+            { key: 'insights', label: 'INSIGHTS' }
+          ].map((item, idx, arr) => {
+            const ind = getStageIndicator(item.key);
+            return (
+              <React.Fragment key={item.key}>
+                <div className={`pipeline-step-node ${ind.className}`}>
+                  <span className="step-symbol">{ind.symbol}</span>
+                  <span className="step-name">{item.label}</span>
+                </div>
+                {idx < arr.length - 1 && <span className="pipeline-arrow">→</span>}
+              </React.Fragment>
+            );
+          })}
+        </div>
+      </section>
+
+      {/* Primary Lifecycle Navigation Bar */}
+      <nav className="primary-lifecycle-nav card" aria-label="Primary Navigation">
+        <div className="nav-lifecycle-buttons">
+          <button
+            type="button"
+            className={`lifecycle-btn ${mainTab === 'concept' ? 'active' : ''}`}
+            onClick={() => setMainTab('concept')}
+          >
+            💡 CONCEPT
+          </button>
+          <button
+            type="button"
+            className={`lifecycle-btn ${mainTab === 'story' ? 'active' : ''}`}
+            onClick={() => setMainTab('story')}
+            disabled={!resultData.storyPackage}
+          >
+            📖 STORY
+          </button>
+          <button
+            type="button"
+            className={`lifecycle-btn ${mainTab === 'screenplay' ? 'active' : ''}`}
+            onClick={() => setMainTab('screenplay')}
+            disabled={!resultData.screenplay}
+          >
+            📜 SCREENPLAY
+          </button>
+          <button
+            type="button"
+            className={`lifecycle-btn ${mainTab === 'production' ? 'active' : ''}`}
+            onClick={() => setMainTab('production')}
+            disabled={!resultData.breakdown}
+          >
+            🎬 PRODUCTION
+          </button>
+          <button
+            type="button"
+            className={`lifecycle-btn ${mainTab === 'script_doctor' ? 'active' : ''}`}
+            onClick={() => setMainTab('script_doctor')}
+            disabled={!resultData.screenplay}
+          >
+            🩺 SCRIPT DOCTOR
+          </button>
+          <button
+            type="button"
+            className={`lifecycle-btn ${mainTab === 'what_if' ? 'active' : ''}`}
+            onClick={() => setMainTab('what_if')}
+            disabled={!resultData.breakdown}
+          >
+            ⚡ WHAT-IF
+          </button>
+          <button
+            type="button"
+            className={`lifecycle-btn ${mainTab === 'export' ? 'active' : ''}`}
+            onClick={() => setMainTab('export')}
+            disabled={!resultData.storyPackage}
+          >
+            📦 EXPORT
+          </button>
+        </div>
+      </nav>
+
+      {/* Main Content Views */}
+      <main className="main-content">
+        {/* Progress & Error Cards */}
         {pipelineState.loading && (
           <section className="card progress-card">
             <div className="progress-header-row">
@@ -478,7 +542,6 @@ export default function App() {
           </section>
         )}
 
-        {/* Error Notification */}
         {pipelineState.stage === 'error' && (
           <div className="card error-card">
             <h3>⚠️ Pipeline Execution Error</h3>
@@ -486,263 +549,450 @@ export default function App() {
           </div>
         )}
 
-        {/* Results Container with Primary Tabs */}
-        {resultData.storyPackage && (
-          <div className="results-container">
-            {/* Top Workspace Navigation Tabs */}
-            <div className="workspace-nav-bar">
-              <div className="nav-tabs">
-                <button
-                  type="button"
-                  className={`nav-tab ${mainTab === 'story' ? 'active' : ''}`}
-                  onClick={() => setMainTab('story')}
-                >
-                  <span className="tab-icon">📖</span> Story Package
-                </button>
-                <button
-                  type="button"
-                  className={`nav-tab ${mainTab === 'screenplay' ? 'active' : ''}`}
-                  onClick={() => setMainTab('screenplay')}
-                >
-                  <span className="tab-icon">📜</span> Screenplay
-                </button>
-                {resultData.breakdown && (
-                  <button
-                    type="button"
-                    className={`nav-tab ${mainTab === 'production_planning' ? 'active' : ''}`}
-                    onClick={() => setMainTab('production_planning')}
-                  >
-                    <span className="tab-icon">🎬</span> Production Planning
-                    <span className="tab-pill">5 Views</span>
-                  </button>
-                )}
+        {/* TAB 1: CONCEPT INTAKE & DASHBOARD OVERVIEW */}
+        {mainTab === 'concept' && (
+          <div className="concept-workspace">
+            {/* Project Overview & Quick Actions (If Plan Exists) */}
+            {hasPlan && (
+              <section className="card dashboard-overview-card" aria-label="Project Overview Dashboard">
+                <div className="card-header">
+                  <div>
+                    <h2>Project Overview Dashboard</h2>
+                    <p className="section-subtitle">Command center view for producers and project leads.</p>
+                  </div>
+                  <span className="badge agent-badge">Active Plan Loaded</span>
+                </div>
+
+                <div className="quick-actions-bar">
+                  <span className="qa-label">QUICK ACTIONS</span>
+                  <div className="qa-buttons">
+                    <button
+                      type="button"
+                      className="btn btn-primary qa-btn"
+                      onClick={() => setMainTab('script_doctor')}
+                    >
+                      🩺 Review My Script
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-secondary qa-btn"
+                      onClick={() => setMainTab('what_if')}
+                    >
+                      ⚡ Explore What-If
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-secondary qa-btn"
+                      onClick={() => {
+                        setMainTab('production');
+                        setPlanningSubTab('breakdown');
+                      }}
+                    >
+                      🎬 View Production Plan
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-secondary qa-btn"
+                      onClick={() => setMainTab('export')}
+                    >
+                      📦 Export Production Bible
+                    </button>
+                  </div>
+                </div>
+              </section>
+            )}
+
+            {/* Concept Intake Form */}
+            <section className="card form-card" aria-label="Film Concept Intake">
+              <div className="card-header">
+                <div>
+                  <h2>PROJECT CONCEPT</h2>
+                  <p className="section-subtitle">Turn a film concept into a production-ready plan.</p>
+                </div>
+                <span className="badge">Studio Intake Desk</span>
               </div>
 
-              <div className="project-id-indicator">
-                <span>Project: <strong>{resultData.projectId}</strong></span>
+              <form className="concept-form">
+                <div className="form-row">
+                  <div className="form-group flex-2">
+                    <label>Film Title <span className="req">*</span></label>
+                    <input
+                      type="text"
+                      name="title"
+                      value={formData.title}
+                      onChange={handleInputChange}
+                      placeholder="e.g., Neon Horizon"
+                      disabled={pipelineState.loading}
+                      required
+                    />
+                  </div>
+
+                  <div className="form-group flex-1">
+                    <label>Genre <span className="req">*</span></label>
+                    <input
+                      type="text"
+                      name="genre"
+                      value={formData.genre}
+                      onChange={handleInputChange}
+                      placeholder="e.g., Sci-Fi Cyberpunk"
+                      disabled={pipelineState.loading}
+                      required
+                    />
+                  </div>
+                </div>
+
+                <div className="form-group">
+                  <label>Logline Concept <span className="req">*</span></label>
+                  <textarea
+                    name="logline"
+                    value={formData.logline}
+                    onChange={handleInputChange}
+                    rows={2}
+                    placeholder="A high-concept one-sentence summary of your film."
+                    disabled={pipelineState.loading}
+                    required
+                  />
+                </div>
+
+                <div className="form-row">
+                  <div className="form-group flex-1">
+                    <label>Tone / Visual Style</label>
+                    <input
+                      type="text"
+                      name="tone"
+                      value={formData.tone}
+                      onChange={handleInputChange}
+                      placeholder="e.g., Neo-Noir, Gritty, Atmospheric"
+                      disabled={pipelineState.loading}
+                    />
+                  </div>
+
+                  <div className="form-group flex-1">
+                    <label>Target Budget ($)</label>
+                    <input
+                      type="number"
+                      name="targetBudget"
+                      value={formData.targetBudget}
+                      onChange={handleInputChange}
+                      placeholder="e.g., 5000000"
+                      disabled={pipelineState.loading}
+                    />
+                  </div>
+
+                  <div className="form-group flex-1">
+                    <label>Target Shoot Days</label>
+                    <input
+                      type="number"
+                      name="targetShootDays"
+                      value={formData.targetShootDays}
+                      onChange={handleInputChange}
+                      placeholder="e.g., 3"
+                      disabled={pipelineState.loading}
+                    />
+                  </div>
+
+                  <div className="form-group flex-1 detail-level-group">
+                    <label>Screenplay Detail Level</label>
+                    <select
+                      name="screenplayDetail"
+                      value={formData.screenplayDetail}
+                      onChange={handleInputChange}
+                      disabled={pipelineState.loading}
+                    >
+                      <option value="concise">Concise (Lean & Fast-Paced)</option>
+                      <option value="cinematic">Cinematic (Vivid & Atmospheric)</option>
+                      <option value="highly_detailed">Highly Detailed (Sensory & Immersive)</option>
+                    </select>
+                  </div>
+
+                  <div className="form-group flex-1">
+                    <label>Project ID (Optional)</label>
+                    <input
+                      type="text"
+                      name="projectId"
+                      value={formData.projectId}
+                      onChange={handleInputChange}
+                      placeholder="auto-generated if empty"
+                      disabled={pipelineState.loading}
+                    />
+                  </div>
+                </div>
+
+                {/* Action Buttons */}
+                <div className="actions-bar">
+                  <button
+                    type="button"
+                    className="submit-btn primary-plan-btn"
+                    onClick={handleGenerateProductionPlan}
+                    disabled={pipelineState.loading}
+                  >
+                    {pipelineState.loading && pipelineState.pipelineMode === 'full' ? (
+                      <>
+                        <span className="spinner"></span> Executing 5-Agent Production Pipeline...
+                      </>
+                    ) : (
+                      '🚀 GENERATE PRODUCTION PLAN'
+                    )}
+                  </button>
+
+                  <button
+                    type="button"
+                    className="secondary-btn"
+                    onClick={handleGenerateStoryScreenplay}
+                    disabled={pipelineState.loading}
+                  >
+                    {pipelineState.loading && pipelineState.pipelineMode === 'screenplay_only' ? (
+                      <>
+                        <span className="spinner"></span> Generating Draft...
+                      </>
+                    ) : (
+                      '📜 Draft Story & Screenplay Only'
+                    )}
+                  </button>
+                </div>
+              </form>
+            </section>
+          </div>
+        )}
+
+        {/* TAB 2: STORY PACKAGE */}
+        {mainTab === 'story' && resultData.storyPackage && (
+          <section className="card story-card" aria-label="Story Package Architecture">
+            <div className="card-header">
+              <h2>Story Package Architecture</h2>
+              <span className="badge agent-badge">Story Agent (Gemini)</span>
+            </div>
+
+            <div className="story-meta">
+              <div className="meta-block">
+                <h4>Logline</h4>
+                <p className="logline-text">{resultData.storyPackage.logline}</p>
+              </div>
+
+              <div className="meta-block">
+                <h4>Synopsis</h4>
+                <p className="synopsis-text">{resultData.storyPackage.synopsis}</p>
               </div>
             </div>
 
-            {/* TAB 1: Story Package Output */}
-            {mainTab === 'story' && (
-              <section className="card story-card">
-                <div className="card-header">
-                  <h2>Story Package Architecture</h2>
-                  <span className="badge agent-badge">Story Agent (Gemini)</span>
+            {resultData.storyPackage.three_act_structure && (
+              <div className="three-act-grid">
+                <div className="act-box">
+                  <h4>Act 1 — Setup</h4>
+                  <p>{resultData.storyPackage.three_act_structure.act1}</p>
                 </div>
-
-                <div className="story-meta">
-                  <div className="meta-block">
-                    <h4>Logline</h4>
-                    <p className="logline-text">{resultData.storyPackage.logline}</p>
-                  </div>
-
-                  <div className="meta-block">
-                    <h4>Synopsis</h4>
-                    <p className="synopsis-text">{resultData.storyPackage.synopsis}</p>
-                  </div>
+                <div className="act-box">
+                  <h4>Act 2 — Confrontation</h4>
+                  <p>{resultData.storyPackage.three_act_structure.act2}</p>
                 </div>
-
-                {resultData.storyPackage.three_act_structure && (
-                  <div className="three-act-grid">
-                    <div className="act-box">
-                      <h4>Act 1 — Setup</h4>
-                      <p>{resultData.storyPackage.three_act_structure.act1}</p>
-                    </div>
-                    <div className="act-box">
-                      <h4>Act 2 — Confrontation</h4>
-                      <p>{resultData.storyPackage.three_act_structure.act2}</p>
-                    </div>
-                    <div className="act-box">
-                      <h4>Act 3 — Resolution</h4>
-                      <p>{resultData.storyPackage.three_act_structure.act3}</p>
-                    </div>
-                  </div>
-                )}
-
-                {resultData.storyPackage.characters && (
-                  <div className="characters-section">
-                    <h3>Character Roster</h3>
-                    <div className="character-grid">
-                      {resultData.storyPackage.characters.map((char, i) => (
-                        <div key={i} className="character-card">
-                          <div className="char-header">
-                            <span className="char-name">{char.name}</span>
-                            <span className="char-role">{char.role}</span>
-                          </div>
-                          <p className="char-desc">{char.description}</p>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </section>
-            )}
-
-            {/* TAB 2: Screenplay Output */}
-            {mainTab === 'screenplay' && resultData.screenplay && (
-              <section className="card screenplay-card">
-                <div className="card-header">
-                  <h2>Formatted Screenplay Output</h2>
-                  <span className="badge screenplay-badge">Screenplay Agent (Gemini)</span>
+                <div className="act-box">
+                  <h4>Act 3 — Resolution</h4>
+                  <p>{resultData.storyPackage.three_act_structure.act3}</p>
                 </div>
-
-                <div className="screenplay-paper">
-                  <div className="screenplay-title-block">
-                    <h1 className="screenplay-title">{resultData.screenplay.title.toUpperCase()}</h1>
-                    <p className="screenplay-byline">Written by CineAgent Studio Screenplay Agent</p>
-                    <p className="screenplay-proj">Project ID: {resultData.projectId}</p>
-                  </div>
-
-                  <div className="screenplay-scenes">
-                    {resultData.screenplay.scenes.map((scene) => (
-                      <div key={scene.scene_number} className="scene-block">
-                        <div className="scene-heading-bar">
-                          <span className="scene-no">SCENE {scene.scene_number}</span>
-                          <span className="scene-slug">{scene.scene_heading}</span>
-                        </div>
-
-                        <div className="action-block">
-                          <p>{scene.action}</p>
-                        </div>
-
-                        {scene.dialogue && scene.dialogue.length > 0 && (
-                          <div className="dialogue-container">
-                            {scene.dialogue.map((d, dIdx) => (
-                              <div key={dIdx} className="dialogue-block">
-                                <div className="character-name">{d.character.toUpperCase()}</div>
-                                {d.parenthetical && (
-                                  <div className="parenthetical">({d.parenthetical})</div>
-                                )}
-                                <div className="dialogue-line">{d.line}</div>
-                              </div>
-                            ))}
-                          </div>
-                        )}
-
-                        {scene.transition && (
-                          <div className="transition-block">
-                            {scene.transition}
-                          </div>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </section>
-            )}
-
-            {/* TAB 3: Production Planning Workspace */}
-            {mainTab === 'production_planning' && (
-              <div className="production-planning-container">
-                {/* Planning Sub-Navigation Bar */}
-                <div className="planning-subnav">
-                  <button
-                    type="button"
-                    className={`subnav-btn ${planningSubTab === 'breakdown' ? 'active' : ''}`}
-                    onClick={() => setPlanningSubTab('breakdown')}
-                  >
-                    📋 Breakdown ({resultData.breakdown?.scenes?.length || 0} Scenes)
-                  </button>
-                  <button
-                    type="button"
-                    className={`subnav-btn ${planningSubTab === 'budget' ? 'active' : ''}`}
-                    onClick={() => setPlanningSubTab('budget')}
-                  >
-                    💰 Budget Intelligence
-                  </button>
-                  <button
-                    type="button"
-                    className={`subnav-btn ${planningSubTab === 'schedule' ? 'active' : ''}`}
-                    onClick={() => setPlanningSubTab('schedule')}
-                  >
-                    📅 Shooting Schedule ({resultData.schedule?.total_shoot_days || 0} Days)
-                  </button>
-                  <button
-                    type="button"
-                    className={`subnav-btn ${planningSubTab === 'insights' ? 'active' : ''}`}
-                    onClick={() => setPlanningSubTab('insights')}
-                  >
-                    📊 Production Insights
-                  </button>
-                  <button
-                    type="button"
-                    className={`subnav-btn ${planningSubTab === 'export' ? 'active' : ''}`}
-                    onClick={() => setPlanningSubTab('export')}
-                  >
-                    📦 Export
-                  </button>
-                </div>
-
-                {/* Sub-View 1: Breakdown */}
-                {planningSubTab === 'breakdown' && (
-                  <BreakdownView breakdown={resultData.breakdown} />
-                )}
-
-                {/* Sub-View 2: Budget */}
-                {planningSubTab === 'budget' && (
-                  <BudgetView budget={resultData.budget} />
-                )}
-
-                {/* Sub-View 3: Schedule */}
-                {planningSubTab === 'schedule' && (
-                  <ScheduleView schedule={resultData.schedule} />
-                )}
-
-                {/* Sub-View 4: Insights (ClickHouse MCP) */}
-                {planningSubTab === 'insights' && (
-                  <ProductionInsightsView
-                    insights={resultData.productionInsights}
-                    projectId={resultData.projectId}
-                  />
-                )}
-
-                {/* Sub-View 5: Export Workspace */}
-                {planningSubTab === 'export' && (
-                  <ExportView
-                    productionPlan={resultData}
-                    isDemoData={resultData.isDemoData}
-                  />
-                )}
               </div>
             )}
 
-            {/* Pipeline Telemetry Footer */}
-            {resultData.pipelineTelemetry && (
-              <section className="card telemetry-card">
-                <div className="card-header">
-                  <h2>Multi-Agent Pipeline Telemetry</h2>
-                  <span className="badge telemetry-badge">ClickHouse Cloud via MCP</span>
+            {resultData.storyPackage.characters && (
+              <div className="characters-section">
+                <h3>Character Roster</h3>
+                <div className="character-grid">
+                  {resultData.storyPackage.characters.map((char, i) => (
+                    <div key={i} className="character-card">
+                      <div className="char-header">
+                        <span className="char-name">{char.name}</span>
+                        <span className="char-role">{char.role}</span>
+                      </div>
+                      <p className="char-desc">{char.description}</p>
+                    </div>
+                  ))}
                 </div>
+              </div>
+            )}
+          </section>
+        )}
 
-                <div className="telemetry-grid">
-                  <div className="telemetry-item">
-                    <span className="t-label">Pipeline Status</span>
-                    <span className="t-val status-success">
-                      {resultData.pipelineTelemetry.status || 'SUCCESS'}
-                    </span>
-                  </div>
+        {/* TAB 3: SCREENPLAY VIEW */}
+        {mainTab === 'screenplay' && resultData.screenplay && (
+          <section className="card screenplay-card" aria-label="Formatted Screenplay Output">
+            <div className="card-header">
+              <div>
+                <h2>Formatted Screenplay Output</h2>
+                <span className="badge screenplay-badge" style={{ marginTop: '4px', display: 'inline-block' }}>
+                  Detail Level: {formData.screenplayDetail === 'concise' ? 'Concise' : formData.screenplayDetail === 'highly_detailed' ? 'Highly Detailed' : 'Cinematic'}
+                </span>
+              </div>
+              <span className="badge agent-badge">Screenplay Agent (Gemini)</span>
+            </div>
 
-                  <div className="telemetry-item">
-                    <span className="t-label">Project ID</span>
-                    <span className="t-val">{resultData.projectId}</span>
-                  </div>
+            <div className="screenplay-paper">
+              <div className="screenplay-title-block">
+                <h1 className="screenplay-title">{resultData.screenplay.title.toUpperCase()}</h1>
+                <p className="screenplay-byline">Written by CineAgent Studio Screenplay Agent</p>
+                <p className="screenplay-proj">Project ID: {resultData.projectId}</p>
+              </div>
 
-                  <div className="telemetry-item">
-                    <span className="t-label">Total Execution Duration</span>
-                    <span className="t-val">{resultData.pipelineTelemetry.durationMs || 0} ms</span>
-                  </div>
+              <div className="screenplay-scenes">
+                {resultData.screenplay.scenes.map((scene) => (
+                  <div key={scene.scene_number} className="scene-block">
+                    <div className="scene-heading-bar">
+                      <span className="scene-no">SCENE {scene.scene_number}</span>
+                      <span className="scene-slug">{scene.scene_heading}</span>
+                    </div>
 
-                  <div className="telemetry-item">
-                    <span className="t-label">ClickHouse MCP Telemetry</span>
-                    <span className="t-val status-success">
-                      {resultData.pipelineTelemetry.mcpLogged ? 'PERSISTED ✅' : 'DISABLED'}
-                    </span>
+                    <div className="action-block">
+                      <p>{scene.action}</p>
+                    </div>
+
+                    {scene.dialogue && scene.dialogue.length > 0 && (
+                      <div className="dialogue-container">
+                        {scene.dialogue.map((d, dIdx) => (
+                          <div key={dIdx} className="dialogue-block">
+                            <div className="character-name">{d.character.toUpperCase()}</div>
+                            {d.parenthetical && (
+                              <div className="parenthetical">({d.parenthetical})</div>
+                            )}
+                            <div className="dialogue-line">{d.line}</div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {scene.transition && (
+                      <div className="transition-block">
+                        {scene.transition}
+                      </div>
+                    )}
                   </div>
-                </div>
-              </section>
+                ))}
+              </div>
+            </div>
+          </section>
+        )}
+
+        {/* TAB 4: PRODUCTION VIEWS */}
+        {mainTab === 'production' && (
+          <div className="production-planning-container">
+            {/* Sub-Navigation Bar inside Production View */}
+            <div className="planning-subnav card" aria-label="Production Sub Navigation">
+              <button
+                type="button"
+                className={`subnav-btn ${planningSubTab === 'breakdown' ? 'active' : ''}`}
+                onClick={() => setPlanningSubTab('breakdown')}
+              >
+                📋 Breakdown ({resultData.breakdown?.scenes?.length || 0} Scenes)
+              </button>
+              <button
+                type="button"
+                className={`subnav-btn ${planningSubTab === 'budget' ? 'active' : ''}`}
+                onClick={() => setPlanningSubTab('budget')}
+              >
+                💰 Budget
+              </button>
+              <button
+                type="button"
+                className={`subnav-btn ${planningSubTab === 'schedule' ? 'active' : ''}`}
+                onClick={() => setPlanningSubTab('schedule')}
+              >
+                📅 Schedule ({resultData.schedule?.total_shoot_days || 0} Days)
+              </button>
+              <button
+                type="button"
+                className={`subnav-btn ${planningSubTab === 'insights' ? 'active' : ''}`}
+                onClick={() => setPlanningSubTab('insights')}
+              >
+                📊 Insights
+              </button>
+            </div>
+
+            {/* Sub-View 1: Breakdown */}
+            {planningSubTab === 'breakdown' && (
+              <BreakdownView breakdown={resultData.breakdown} />
+            )}
+
+            {/* Sub-View 2: Budget */}
+            {planningSubTab === 'budget' && (
+              <BudgetView budget={resultData.budget} />
+            )}
+
+            {/* Sub-View 3: Schedule */}
+            {planningSubTab === 'schedule' && (
+              <ScheduleView schedule={resultData.schedule} />
+            )}
+
+            {/* Sub-View 4: Insights */}
+            {planningSubTab === 'insights' && (
+              <ProductionInsightsView
+                insights={resultData.productionInsights}
+                projectId={resultData.projectId}
+              />
             )}
           </div>
+        )}
+
+        {/* TAB 5: SCRIPT DOCTOR */}
+        {mainTab === 'script_doctor' && (
+          <section className="card script-doctor-card">
+            <ScriptDoctorView screenplay={resultData.screenplay} />
+          </section>
+        )}
+
+        {/* TAB 6: WHAT-IF SIMULATOR */}
+        {mainTab === 'what_if' && (
+          <section className="card what-if-card">
+            <WhatIfView
+              breakdown={resultData.breakdown}
+              budget={resultData.budget}
+              schedule={resultData.schedule}
+            />
+          </section>
+        )}
+
+        {/* TAB 7: EXPORT WORKSPACE */}
+        {mainTab === 'export' && (
+          <section className="card export-card">
+            <ExportView
+              productionPlan={resultData}
+              isDemoData={resultData.isDemoData}
+            />
+          </section>
+        )}
+
+        {/* Telemetry Footer */}
+        {resultData.pipelineTelemetry && (
+          <section className="card telemetry-card" aria-label="Pipeline Telemetry">
+            <div className="card-header">
+              <h2>Multi-Agent Pipeline Telemetry</h2>
+              <span className="badge telemetry-badge">ClickHouse Cloud via MCP</span>
+            </div>
+
+            <div className="telemetry-grid">
+              <div className="telemetry-item">
+                <span className="t-label">Pipeline Status</span>
+                <span className="t-val status-success">
+                  {resultData.pipelineTelemetry.status || 'SUCCESS'}
+                </span>
+              </div>
+
+              <div className="telemetry-item">
+                <span className="t-label">Project ID</span>
+                <span className="t-val">{resultData.projectId}</span>
+              </div>
+
+              <div className="telemetry-item">
+                <span className="t-label">Total Execution Duration</span>
+                <span className="t-val">
+                  {resultData.pipelineTelemetry.totalDurationMs ?? resultData.pipelineTelemetry.durationMs ?? resultData.pipelineTelemetry.total_duration_ms ?? 0} ms
+                </span>
+              </div>
+
+              <div className="telemetry-item">
+                <span className="t-label">ClickHouse MCP Telemetry</span>
+                <span className={`t-val ${(resultData.pipelineTelemetry.mcpLogged || resultData.pipelineTelemetry.mcpStatus === 'CONNECTED / SYNCED' || resultData.productionInsights?.clickHouseConnected) ? 'status-success' : 'status-disabled'}`}>
+                  {resultData.pipelineTelemetry.mcpStatus || (resultData.pipelineTelemetry.mcpLogged || resultData.productionInsights?.clickHouseConnected ? 'CONNECTED / SYNCED' : 'DISABLED / UNAVAILABLE')}
+                </span>
+              </div>
+            </div>
+          </section>
         )}
       </main>
     </div>

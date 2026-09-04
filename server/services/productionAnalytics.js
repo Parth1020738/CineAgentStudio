@@ -1,91 +1,84 @@
-import { executeMcpQuery, validateClickHouseConfig } from '../mcp/clickhouseMcp.js';
+import { executeMcpQuery, validateClickHouseConfig, ensureCineAgentSchema } from '../mcp/clickhouseMcp.js';
+
+let analyticsSchemaInitPromise = null;
+let isAnalyticsSchemaInitialized = false;
 
 /**
- * Ensures all production analytics tables exist in ClickHouse Cloud via MCP run_query.
+ * Resets analytics schema initialization state (used for testing or reconnection).
  */
-export async function ensureProductionAnalyticsSchema() {
+export function resetAnalyticsSchemaInitState() {
+  analyticsSchemaInitPromise = null;
+  isAnalyticsSchemaInitialized = false;
+}
+
+/**
+ * Ensures all production analytics tables exist in ClickHouse Cloud via MCP run_query ONCE per process.
+ * Concurrent callers share and await the same initialization promise.
+ * @returns {Promise<boolean>} Resolves when initialization completes.
+ */
+export function ensureProductionAnalyticsSchema() {
   if (!validateClickHouseConfig()) {
     console.warn('[Analytics Service] ClickHouse credentials missing. Skipping schema creation.');
-    return;
+    return Promise.resolve(false);
   }
 
-  const ddlQueries = [
-    `CREATE TABLE IF NOT EXISTS agent_runs (
-        run_id String,
-        project_id String,
-        agent_name String,
-        status String,
-        duration_ms UInt32,
-        created_at DateTime DEFAULT now()
-    ) ENGINE = MergeTree() ORDER BY (project_id, created_at)`,
-
-    `CREATE TABLE IF NOT EXISTS scene_metrics (
-        project_id String,
-        scene_id String,
-        scene_number UInt16,
-        scene_heading String,
-        location String,
-        interior_exterior String,
-        time_of_day String,
-        cast_count UInt16,
-        extras_count UInt16,
-        complexity String,
-        estimated_cost Float64,
-        shooting_day UInt16,
-        created_at DateTime DEFAULT now()
-    ) ENGINE = MergeTree() ORDER BY (project_id, scene_number)`,
-
-    `CREATE TABLE IF NOT EXISTS project_budgets (
-        project_id String,
-        title String,
-        target_budget Float64,
-        estimated_total Float64,
-        budget_status String,
-        budget_variance Float64,
-        scene_linked_cost_total Float64,
-        project_wide_cost_total Float64,
-        contingency_cost Float64,
-        created_at DateTime DEFAULT now()
-    ) ENGINE = MergeTree() ORDER BY (project_id, created_at)`,
-
-    `CREATE TABLE IF NOT EXISTS budget_categories (
-        project_id String,
-        category String,
-        estimated_cost Float64,
-        explanation String,
-        created_at DateTime DEFAULT now()
-    ) ENGINE = MergeTree() ORDER BY (project_id, category)`,
-
-    `CREATE TABLE IF NOT EXISTS budget_drivers (
-        project_id String,
-        factor String,
-        impact Float64,
-        explanation String,
-        created_at DateTime DEFAULT now()
-    ) ENGINE = MergeTree() ORDER BY (project_id, factor)`
-  ];
-
-  for (const query of ddlQueries) {
-    await executeMcpQuery(query);
+  if (isAnalyticsSchemaInitialized) {
+    return Promise.resolve(true);
   }
 
-  // Idempotent column migrations for pre-existing legacy scene_metrics tables
-  const alterColumns = [
-    'ALTER TABLE scene_metrics ADD COLUMN IF NOT EXISTS scene_number UInt16',
-    'ALTER TABLE scene_metrics ADD COLUMN IF NOT EXISTS scene_heading String',
-    'ALTER TABLE scene_metrics ADD COLUMN IF NOT EXISTS interior_exterior String',
-    'ALTER TABLE scene_metrics ADD COLUMN IF NOT EXISTS time_of_day String',
-    'ALTER TABLE scene_metrics ADD COLUMN IF NOT EXISTS extras_count UInt16',
-    'ALTER TABLE scene_metrics ADD COLUMN IF NOT EXISTS complexity String'
-  ];
+  if (analyticsSchemaInitPromise) {
+    return analyticsSchemaInitPromise;
+  }
 
-  for (const alterQuery of alterColumns) {
-    try {
-      await executeMcpQuery(alterQuery);
-    } catch (err) {
-      console.warn(`[Analytics Schema Migration] ${alterQuery}: ${err.message}`);
+  analyticsSchemaInitPromise = (async () => {
+    // 1. Ensure core schema & column migrations complete
+    await ensureCineAgentSchema();
+
+    // 2. Ensure remaining analytics tables exist
+    const ddlQueries = [
+      `CREATE TABLE IF NOT EXISTS project_budgets (
+          project_id String,
+          title String,
+          target_budget Float64,
+          estimated_total Float64,
+          budget_status String,
+          budget_variance Float64,
+          scene_linked_cost_total Float64,
+          project_wide_cost_total Float64,
+          contingency_cost Float64,
+          created_at DateTime DEFAULT now()
+      ) ENGINE = MergeTree() ORDER BY (project_id, created_at)`,
+
+      `CREATE TABLE IF NOT EXISTS budget_categories (
+          project_id String,
+          category String,
+          estimated_cost Float64,
+          explanation String,
+          created_at DateTime DEFAULT now()
+      ) ENGINE = MergeTree() ORDER BY (project_id, category)`,
+
+      `CREATE TABLE IF NOT EXISTS budget_drivers (
+          project_id String,
+          factor String,
+          impact Float64,
+          explanation String,
+          created_at DateTime DEFAULT now()
+      ) ENGINE = MergeTree() ORDER BY (project_id, factor)`
+    ];
+
+    for (const query of ddlQueries) {
+      await executeMcpQuery(query);
     }
-  }
+
+    isAnalyticsSchemaInitialized = true;
+    return true;
+  })().catch((err) => {
+    analyticsSchemaInitPromise = null;
+    isAnalyticsSchemaInitialized = false;
+    throw err;
+  });
+
+  return analyticsSchemaInitPromise;
 }
 
 /**

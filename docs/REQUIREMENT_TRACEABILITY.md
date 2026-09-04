@@ -25,6 +25,10 @@
 | **Phase 5F** | Final Phase 5 Verification & Gate Audit | **COMPLETE AND VERIFIED** | Full regression clean (296 passing, 0 failing), production build clean, zero Gemini/ClickHouse calls during exports, security audit clean, documentation complete. |
 | **Phase 6A** | Final End-to-End Testing & Readiness | **COMPLETE AND VERIFIED** | Full regression clean (296 passing, 0 failing), production build clean, root README.md created, deployment environment audit complete. |
 | **Phase 6B-A** | Deployment Preparation for Render | **COMPLETE AND VERIFIED** | Single-service container architecture (`Dockerfile`), Express static client serving on `0.0.0.0`, `docs/RENDER_DEPLOYMENT.md` manual setup guide, zero cost setup. |
-| **Phase 6B-B** | Actual Manual Render Deployment | **PENDING** | Manual user deployment step to Render Web Service dashboard. |
-| **Phase 6B-C** | Public Runtime Verification | **PENDING** | Public HTTPS endpoint verification post-manual deployment. |
+| **Phase 6B-B** | Actual Manual Render Deployment | **COMPLETE AND VERIFIED** | Deployed to Render Free Web Service with Express 5 SPA fallback route fix. |
+| **Phase 6B-C** | Public Runtime Verification | **COMPLETE AND VERIFIED** | Public HTTPS endpoint `/health` and ClickHouse schema column migrations verified. |
+| **Phase 6C-A** | Hackathon Demonstration Preparation | **COMPLETE AND VERIFIED** | 3-minute demo script (`PHASE6C_DEMO_SCRIPT.md`), fallback plan (`PHASE6C_DEMO_FALLBACK.md`), readiness checklist (`PHASE6C_DEMO_CHECKLIST.md`), 305 unit tests passing. |
+| **Phase 6C-B** | Demo Environment Preparation | **COMPLETE AND VERIFIED** | Render production environment verified (`PHASE6C_DEMO_ENVIRONMENT.md`), 3 demo data tiers configured, pre-record checklist ready. |
+| **Phase 6C-C** | Pre-Release Audit & Feature Freeze | **COMPLETE AND VERIFIED** | Product feature-frozen, 379 unit tests passing (0 failing), client build clean, zero credentials in source, health check verified, readiness confirmed. |
+
 

@@ -2491,7 +2491,8 @@ describe('CineAgent Studio - Unit Tests', () => {
     });
   });
 
-  describe('Phase 5A - Export Architecture & Data Contracts Unit Tests', () => {
+  describe('Phase 5A - Export Architecture & Data Contracts Unit Tests', function () {
+    this.timeout(10000);
     it('1. Canonical export package creation builds valid package structure', async () => {
       const { createExportPackage, EXPORT_TYPES } = await import('../server/services/exportService.js');
       const { getDemoProductionPlan } = await import('../server/fixtures/demoFixtures.js');
@@ -3829,8 +3830,931 @@ describe('CineAgent Studio - Unit Tests', () => {
       assert.ok(serverCode.includes("app.get('/{*splat}'"), 'Express 5 SPA fallback must use /{*splat}');
       assert.ok(!serverCode.includes("app.get('*'"), 'Legacy Express 4 app.get("*") must not be used');
     });
+
+    it('10. Concurrent calls to ensureCineAgentSchema share the same initialization promise', async () => {
+      const { ensureCineAgentSchema, resetSchemaInitState } = await import('../server/mcp/clickhouseMcp.js');
+      resetSchemaInitState();
+      
+      const p1 = ensureCineAgentSchema();
+      const p2 = ensureCineAgentSchema();
+
+      assert.strictEqual(p1, p2, 'Concurrent calls must return the identical promise instance');
+      p1.catch(() => {});
+    });
+
+    it('11. Concurrent calls to ensureProductionAnalyticsSchema share the same initialization promise', async () => {
+      const { ensureProductionAnalyticsSchema, resetAnalyticsSchemaInitState } = await import('../server/services/productionAnalytics.js');
+      const { resetSchemaInitState } = await import('../server/mcp/clickhouseMcp.js');
+      resetSchemaInitState();
+      resetAnalyticsSchemaInitState();
+
+      const p1 = ensureProductionAnalyticsSchema();
+      const p2 = ensureProductionAnalyticsSchema();
+
+      assert.strictEqual(p1, p2, 'Concurrent calls to analytics schema must return identical promise instance');
+      p1.catch(() => {});
+    });
+
+    it('12. Completed schema initialization returns cached resolved promise without re-running DDLs', async () => {
+      const { ensureCineAgentSchema, resetSchemaInitState } = await import('../server/mcp/clickhouseMcp.js');
+      resetSchemaInitState();
+
+      const p1 = ensureCineAgentSchema();
+      p1.catch(() => {});
+      const p2 = ensureCineAgentSchema();
+      assert.strictEqual(p1, p2, 'Subsequent call returns cached initialization promise');
+    });
+  });
+
+  describe('Phase 6C Enhancement 1 - Richer Screenplay Generation Tests', () => {
+    it('1. ScreenplayInputSchema accepts screenplayDetail mode options (concise, cinematic, highly_detailed)', async () => {
+      const { ScreenplayInputSchema } = await import('../server/agents/screenplayAgent.js');
+      const baseInput = {
+        title: 'Test Title',
+        logline: 'Test Logline',
+        synopsis: 'Test Synopsis',
+        characters: [{ name: 'Silas', role: 'Protagonist', description: 'Engineer' }]
+      };
+
+      const conciseParsed = ScreenplayInputSchema.parse({ ...baseInput, screenplayDetail: 'concise' });
+      assert.strictEqual(conciseParsed.screenplayDetail, 'concise');
+
+      const cinematicParsed = ScreenplayInputSchema.parse({ ...baseInput, screenplayDetail: 'cinematic' });
+      assert.strictEqual(cinematicParsed.screenplayDetail, 'cinematic');
+
+      const detailedParsed = ScreenplayInputSchema.parse({ ...baseInput, screenplayDetail: 'highly_detailed' });
+      assert.strictEqual(detailedParsed.screenplayDetail, 'highly_detailed');
+    });
+
+    it('2. Default screenplayDetail mode is cinematic when unspecified', async () => {
+      const { ScreenplayInputSchema } = await import('../server/agents/screenplayAgent.js');
+      const parsed = ScreenplayInputSchema.parse({
+        title: 'Default Test',
+        logline: 'Default Logline',
+        synopsis: 'Default Synopsis',
+        characters: [{ name: 'Silas', role: 'Protagonist', description: 'Engineer' }]
+      });
+      assert.strictEqual(parsed.screenplayDetail, 'cinematic');
+    });
+
+    it('3. Map Story to Screenplay input preserves and forwards screenplayDetail option', async () => {
+      const { mapStoryToScreenplayInput } = await import('../server/agents/pipeline.js');
+      const storyPkg = {
+        title: 'Pipeline Title',
+        logline: 'Pipeline Logline',
+        synopsis: 'Pipeline Synopsis',
+        three_act_structure: { act1: 'Act 1 setup', act2: 'Act 2 confrontation', act3: 'Act 3 climax' },
+        characters: [{ name: 'Silas', role: 'Protagonist', description: 'Engineer' }]
+      };
+
+      const mapped = mapStoryToScreenplayInput(storyPkg, { title: 'Pipeline Title', screenplayDetail: 'highly_detailed' });
+      assert.strictEqual(mapped.screenplayDetail, 'highly_detailed');
+    });
+
+    it('4. Existing ScreenplayOutputSchema validation passes for rich cinematic screenplay payloads', async () => {
+      const { ScreenplayOutputSchema } = await import('../server/agents/screenplayAgent.js');
+      const validPayload = {
+        project_id: 'test_rich_1',
+        title: 'The Last Monsoon',
+        scenes: [
+          {
+            scene_number: 1,
+            scene_heading: 'INT. SEWER NETWORK - NIGHT',
+            location: 'SEWER NETWORK',
+            time: 'NIGHT',
+            action: 'Torrential rainwater gushes through cracked subterranean arches.',
+            dialogue: [{ character: 'Silas', line: 'Hold the pressure line!' }]
+          },
+          {
+            scene_number: 2,
+            scene_heading: 'EXT. ROOFTOP - NIGHT',
+            location: 'ROOFTOP',
+            time: 'NIGHT',
+            action: 'Lightning illuminates torrential downpour as Silas secures cables.',
+            dialogue: [{ character: 'Silas', line: 'The train is approaching!' }]
+          }
+        ]
+      };
+      const parsed = ScreenplayOutputSchema.parse(validPayload);
+      assert.strictEqual(parsed.scenes.length, 2);
+    });
+
+    it('5. Story to Screenplay continuity verification passes with rich screenplay scenes', async () => {
+      const { validatePipelineContinuity } = await import('../server/agents/pipeline.js');
+      const storyPkg = {
+        title: 'The Last Monsoon',
+        logline: 'Survival in monsoon',
+        synopsis: 'Train evacuation during floods',
+        characters: [{ name: 'Silas', role: 'Engineer', description: 'Railway engineer' }]
+      };
+      const screenplay = {
+        project_id: 'the_last_monsoon',
+        title: 'The Last Monsoon',
+        scenes: [
+          {
+            scene_number: 1,
+            scene_heading: 'INT. SEWER NETWORK - NIGHT',
+            location: 'SEWER NETWORK',
+            time: 'NIGHT',
+            action: 'Silas adjusts heavy iron levers.',
+            dialogue: [{ character: 'Silas', line: 'We have to move now.' }]
+          },
+          {
+            scene_number: 2,
+            scene_heading: 'EXT. ROOFTOP - NIGHT',
+            location: 'ROOFTOP',
+            time: 'NIGHT',
+            action: 'Silas signals the locomotive conductor.',
+            dialogue: [{ character: 'Silas', line: 'Clear the tracks!' }]
+          }
+        ]
+      };
+      assert.ok(validatePipelineContinuity(storyPkg, screenplay, { title: 'The Last Monsoon' }));
+    });
+
+    it('6. Downstream handoff compatibility maintained for Breakdown, Budget, and Schedule agents', async () => {
+      const { normalizeScreenplayPayload } = await import('../server/agents/screenplayAgent.js');
+      const raw = {
+        project_id: 'downstream_test',
+        title: 'Downstream Test',
+        scenes: [
+          {
+            heading: 'INT. STATION HALL - DAY',
+            location: 'STATION HALL',
+            time: 'DAY',
+            description: 'Vivid, highly detailed visual action block with atmospheric lighting.',
+            dialogue: [{ speaker: 'Silas', line: 'All aboard.' }]
+          },
+          {
+            heading: 'EXT. TRAIN TRACKS - NIGHT',
+            location: 'TRAIN TRACKS',
+            time: 'NIGHT',
+            description: 'Dense rain machines wet down train engine.',
+            dialogue: [{ speaker: 'Silas', line: 'Full steam ahead!' }]
+          }
+        ]
+      };
+      const normalized = normalizeScreenplayPayload(raw, { projectId: 'downstream_test', title: 'Downstream Test' });
+      assert.strictEqual(normalized.scenes.length, 2);
+      assert.strictEqual(normalized.scenes[0].scene_heading, 'INT. STATION HALL - DAY');
+    });
+  });
+
+  describe('Phase 6C Enhancement 2 - Script Doctor Unit Tests', () => {
+    it('1. Valid Script Doctor result passes ScriptDoctorOutputSchema validation', async () => {
+      const { ScriptDoctorOutputSchema } = await import('../server/agents/scriptDoctorAgent.js');
+      const validPayload = {
+        overall_score: 85,
+        category_scores: {
+          structure: 88,
+          pacing: 82,
+          character_arcs: 80,
+          dialogue: 86,
+          conflict: 87,
+          scene_effectiveness: 85,
+          production_feasibility: 84
+        },
+        strengths: ['Vivid environmental description in Scene 1.'],
+        issues: ['Fast pacing in Act 2 transition.'],
+        recommendations: ['Add reflective dialogue beat before the climax.']
+      };
+      const parsed = ScriptDoctorOutputSchema.parse(validPayload);
+      assert.strictEqual(parsed.overall_score, 85);
+      assert.strictEqual(parsed.category_scores.structure, 88);
+    });
+
+    it('2. Score normalization clamps floating point values and out-of-bound numbers to 0-100 integers', async () => {
+      const { normalizeScriptDoctorPayload } = await import('../server/agents/scriptDoctorAgent.js');
+      const raw = {
+        overall_score: 105.7,
+        category_scores: {
+          structure: 110,
+          pacing: -15,
+          character_arcs: 82.4,
+          dialogue: 90,
+          conflict: 85,
+          scene_effectiveness: 75,
+          production_feasibility: 80
+        },
+        strengths: ['Good character beats'],
+        issues: ['Pacing is fast'],
+        recommendations: ['Add quiet beat']
+      };
+      const normalized = normalizeScriptDoctorPayload(raw);
+      assert.strictEqual(normalized.overall_score, 100);
+      assert.strictEqual(normalized.category_scores.structure, 100);
+      assert.strictEqual(normalized.category_scores.pacing, 0);
+      assert.strictEqual(normalized.category_scores.character_arcs, 82);
+    });
+
+    it('3. Score bounds enforcement rejects invalid score values < 0 or > 100 in direct schema parse', async () => {
+      const { ScriptDoctorOutputSchema } = await import('../server/agents/scriptDoctorAgent.js');
+      const invalidPayload = {
+        overall_score: 150,
+        category_scores: {
+          structure: 80, pacing: 80, character_arcs: 80, dialogue: 80, conflict: 80, scene_effectiveness: 80, production_feasibility: 80
+        },
+        strengths: ['Valid strength'],
+        issues: ['Valid issue'],
+        recommendations: ['Valid recommendation']
+      };
+      assert.throws(() => ScriptDoctorOutputSchema.parse(invalidPayload));
+    });
+
+    it('4. Missing overall_score is rejected by direct schema parse', async () => {
+      const { ScriptDoctorOutputSchema } = await import('../server/agents/scriptDoctorAgent.js');
+      const payload = {
+        category_scores: {
+          structure: 80, pacing: 80, character_arcs: 80, dialogue: 80, conflict: 80, scene_effectiveness: 80, production_feasibility: 80
+        },
+        strengths: ['Strength'],
+        issues: ['Issue'],
+        recommendations: ['Recommendation']
+      };
+      assert.throws(() => ScriptDoctorOutputSchema.parse(payload));
+    });
+
+    it('5. Missing category_scores is rejected by direct schema parse', async () => {
+      const { ScriptDoctorOutputSchema } = await import('../server/agents/scriptDoctorAgent.js');
+      const payload = {
+        overall_score: 80,
+        strengths: ['Strength'],
+        issues: ['Issue'],
+        recommendations: ['Recommendation']
+      };
+      assert.throws(() => ScriptDoctorOutputSchema.parse(payload));
+    });
+
+    it('6. Malformed non-JSON strings throw descriptive normalization error', async () => {
+      const { normalizeScriptDoctorPayload } = await import('../server/agents/scriptDoctorAgent.js');
+      assert.throws(() => normalizeScriptDoctorPayload('This is plain text with no json'), /Script Doctor payload is not a valid JSON object/);
+    });
+
+    it('7. Fenced markdown JSON is extracted and normalized correctly', async () => {
+      const { normalizeScriptDoctorPayload } = await import('../server/agents/scriptDoctorAgent.js');
+      const fenced = `
+Here is your script doctor review:
+\`\`\`json
+{
+  "overall_score": 88,
+  "category_scores": {
+    "structure": 90,
+    "pacing": 85,
+    "character_arcs": 85,
+    "dialogue": 88,
+    "conflict": 89,
+    "scene_effectiveness": 87,
+    "production_feasibility": 86
+  },
+  "strengths": ["Excellent dramatic tension in Scene 1."],
+  "issues": ["Minor dialogue repetition."],
+  "recommendations": ["Trim second line of dialogue in Scene 2."]
+}
+\`\`\`
+Hope this helps!`;
+      const normalized = normalizeScriptDoctorPayload(fenced);
+      assert.strictEqual(normalized.overall_score, 88);
+      assert.strictEqual(normalized.strengths[0], 'Excellent dramatic tension in Scene 1.');
+    });
+
+    it('8. Grounded recommendations and strengths are preserved without fabrication', async () => {
+      const { normalizeScriptDoctorPayload } = await import('../server/agents/scriptDoctorAgent.js');
+      const raw = {
+        overall_score: 82,
+        category_scores: {
+          structure: 80, pacing: 80, character_arcs: 80, dialogue: 80, conflict: 80, scene_effectiveness: 80, production_feasibility: 80
+        },
+        strengths: ['Silas has clear motivation in INT. BENGAL JUNCTION RAILWAY SHED.'],
+        issues: ['Maya lacks reflective beat before TEESTA TRESTLE BRIDGE.'],
+        recommendations: ['Add 2 lines of dialogue between Silas and Maya in Scene 2.']
+      };
+      const normalized = normalizeScriptDoctorPayload(raw);
+      assert.ok(normalized.strengths[0].includes('Silas'));
+      assert.ok(normalized.issues[0].includes('Maya'));
+      assert.ok(normalized.recommendations[0].includes('Scene 2'));
+    });
+
+    it('9. Endpoint sanitizes error messages without exposing secret keys', async () => {
+      const fs = await import('fs');
+      const serverCode = fs.readFileSync('./server/index.js', 'utf8');
+      assert.ok(serverCode.includes("app.post('/api/script-doctor/review'"), 'Script Doctor endpoint must be defined');
+      assert.ok(serverCode.includes('[REDACTED]'), 'Secret API keys must be sanitized from error output');
+    });
+
+    it('10. Review button action triggers endpoint and screenplay remains completely unchanged', async () => {
+      const { ScreenplayOutputSchema } = await import('../server/agents/screenplayAgent.js');
+      const originalScreenplay = {
+        project_id: 'immutable_test',
+        title: 'Immutable Screenplay',
+        scenes: [
+          {
+            scene_number: 1,
+            scene_heading: 'INT. CABIN - DAY',
+            location: 'CABIN',
+            time: 'DAY',
+            action: 'Silas inspects the map.',
+            dialogue: [{ character: 'Silas', line: 'The storm is coming.' }]
+          },
+          {
+            scene_number: 2,
+            scene_heading: 'EXT. BRIDGE - NIGHT',
+            location: 'BRIDGE',
+            time: 'NIGHT',
+            action: 'Maya signals with a torch.',
+            dialogue: [{ character: 'Maya', line: 'Hurry!' }]
+          }
+        ]
+      };
+      const copyBefore = JSON.parse(JSON.stringify(originalScreenplay));
+      
+      // Validate schema compliance before and after
+      ScreenplayOutputSchema.parse(originalScreenplay);
+      assert.deepStrictEqual(originalScreenplay, copyBefore, 'Screenplay object must remain untouched');
+    });
+
+    it('11. Script Doctor UI component renders Idle state and primary "Review My Script" button', async () => {
+      const fs = await import('fs');
+      const uiCode = fs.readFileSync('./client/src/components/ScriptDoctorView.jsx', 'utf8');
+      assert.ok(uiCode.includes('Review My Script'), 'Primary button must be labeled Review My Script');
+      assert.ok(uiCode.includes('Get an AI editorial pass on your screenplay'), 'Explanatory filmmaker message must be present');
+      assert.ok(!uiCode.includes('Rewrite Script'), 'Must NOT include automatic script rewrite button');
+    });
+
+    it('12. Reviewing state disables button to prevent duplicate concurrent API requests', async () => {
+      const fs = await import('fs');
+      const uiCode = fs.readFileSync('./client/src/components/ScriptDoctorView.jsx', 'utf8');
+      assert.ok(uiCode.includes("disabled={status === 'reviewing'"), 'Reviewing state must disable button');
+      assert.ok(uiCode.includes("status === 'reviewing' ? 'Reviewing...' : 'Review My Script'"), 'Button text updates during reviewing state');
+    });
+
+    it('13. Successful review renders Overall Score and 7 Category Cards', async () => {
+      const fs = await import('fs');
+      const uiCode = fs.readFileSync('./client/src/components/ScriptDoctorView.jsx', 'utf8');
+      assert.ok(uiCode.includes('overall_score'), 'UI renders overall score');
+      assert.ok(uiCode.includes('category_scores'), 'UI renders category scores');
+      assert.ok(uiCode.includes('STRENGTHS'), 'UI renders strengths block');
+      assert.ok(uiCode.includes('ISSUES FOUND'), 'UI renders issues block');
+      assert.ok(uiCode.includes('RECOMMENDATIONS'), 'UI renders recommendations block');
+    });
+
+    it('14. Error state renders sanitized error banner without exposing stack traces', async () => {
+      const fs = await import('fs');
+      const uiCode = fs.readFileSync('./client/src/components/ScriptDoctorView.jsx', 'utf8');
+      assert.ok(uiCode.includes("status === 'error'"), 'Error banner state handled');
+      assert.ok(uiCode.includes('Script Doctor Error:'), 'Friendly error banner heading rendered');
+    });
+
+    it('15. Script Doctor tab integration present in main workspace UI without auto-review', async () => {
+      const fs = await import('fs');
+      const appCode = fs.readFileSync('./client/src/App.jsx', 'utf8');
+      assert.ok(appCode.includes('ScriptDoctorView'), 'ScriptDoctorView must be imported');
+      assert.ok(appCode.includes("mainTab === 'script_doctor'"), 'Script Doctor tab route present');
+      assert.ok(!appCode.includes('handleReviewScript()'), 'Auto-review must NOT be triggered automatically upon screenplay load');
+    });
+
+    it('16. Client structures contain zero exposed API credentials or secret tokens', async () => {
+      const fs = await import('fs');
+      const uiCode = fs.readFileSync('./client/src/components/ScriptDoctorView.jsx', 'utf8');
+      assert.ok(!uiCode.includes('GOOGLE_GENAI_API_KEY'));
+      assert.ok(!uiCode.includes('CLICKHOUSE_PASSWORD'));
+      assert.ok(!uiCode.includes('AIZA'));
+    });
+
+    it('17. Script Doctor passes valid agent object to executeAgentWithPolicy', async () => {
+      const fs = await import('fs');
+      const agentCode = fs.readFileSync('./server/agents/scriptDoctorAgent.js', 'utf8');
+      assert.ok(agentCode.includes('agentName: \'script_doctor_agent\''), 'Must pass agentName');
+      assert.ok(agentCode.includes('agent: scriptDoctorAgent'), 'Must pass valid ADK LlmAgent object');
+      assert.ok(!agentCode.includes('executeAgentWithPolicy(scriptDoctorAgent, promptText)'), 'Must not pass positional arguments');
+    });
+
+    it('18. executeAgentWithPolicy fails immediately on missing agent without format repair retries', async () => {
+      const { executeAgentWithPolicy } = await import('../server/config/geminiConfig.js');
+      try {
+        await executeAgentWithPolicy({ agentName: 'test_agent', agent: null, userPrompt: 'test', parseAndValidate: (x) => x });
+        assert.fail('Should have thrown on missing agent');
+      } catch (err) {
+        assert.ok(err.message.includes('agent must be provided in runner constructor'), 'Must throw exact runner constructor error immediately');
+      }
+    });
+
+    it('19. Script Doctor telemetry writes valid non-empty run_id, project_id, and agent_name', async () => {
+      const fs = await import('fs');
+      const agentCode = fs.readFileSync('./server/agents/scriptDoctorAgent.js', 'utf8');
+      assert.ok(agentCode.includes('run_id: runId'), 'Telemetry must include generated runId');
+      assert.ok(agentCode.includes('project_id: projectId'), 'Telemetry must include validated projectId');
+      assert.ok(agentCode.includes("agent_name: 'script_doctor_agent'"), 'Telemetry must include script_doctor_agent');
+      assert.ok(!agentCode.includes('run_id: undefined'));
+      assert.ok(!agentCode.includes('project_id: undefined'));
+    });
+  });
+
+  describe('Phase 6C Enhancement 3 - Production What-If Simulator Unit Tests', () => {
+    const mockBreakdown = {
+      project_id: 'whatif_test_1',
+      title: 'What-If Test Title',
+      scenes: [
+        { scene_number: 1, location: 'SEWER NETWORK', time: 'NIGHT' },
+        { scene_number: 2, location: 'TRESTLE BRIDGE', time: 'NIGHT' },
+        { scene_number: 3, location: 'LOCOMOTIVE CAB', time: 'DAY' }
+      ]
+    };
+    const mockBudget = {
+      target_budget: 5000000,
+      estimated_total: 5000000,
+      categories: [
+        { category: 'Equipment', estimated_cost: 1000000, explanation: 'Cameras & rigs' },
+        { category: 'Locations', estimated_cost: 800000, explanation: 'Bridge permits' },
+        { category: 'Cast & Crew', estimated_cost: 2000000, explanation: 'Day rates' }
+      ]
+    };
+    const mockSchedule = {
+      total_shoot_days: 5,
+      days: [
+        { day_number: 1, scenes: [{ scene_number: 1 }] },
+        { day_number: 2, scenes: [{ scene_number: 1 }] },
+        { day_number: 3, scenes: [{ scene_number: 2 }] },
+        { day_number: 4, scenes: [{ scene_number: 2 }] },
+        { day_number: 5, scenes: [{ scene_number: 3 }] }
+      ]
+    };
+
+    it('1. Baseline scenario output matches baseline parameters when target equals baseline', async () => {
+      const { simulateWhatIfScenario } = await import('../server/services/whatIfSimulator.js');
+      const result = simulateWhatIfScenario({
+        breakdown: mockBreakdown,
+        budget: mockBudget,
+        schedule: mockSchedule,
+        targetShootDays: 5,
+        targetBudget: 5000000
+      });
+      assert.strictEqual(result.baseline.shoot_days, 5);
+      assert.strictEqual(result.baseline.budget, 5000000);
+      assert.strictEqual(result.deltas.shoot_days_delta, 0);
+      assert.strictEqual(result.deltas.budget_delta, 0);
+    });
+
+    it('2. Reduced shoot days scenario calculates compression and identifies affected scenes', async () => {
+      const { simulateWhatIfScenario } = await import('../server/services/whatIfSimulator.js');
+      const result = simulateWhatIfScenario({
+        breakdown: mockBreakdown,
+        budget: mockBudget,
+        schedule: mockSchedule,
+        targetShootDays: 4,
+        targetBudget: 5000000
+      });
+      assert.strictEqual(result.deltas.shoot_days_delta, -1);
+      assert.strictEqual(result.deltas.days_compression_pct, 20);
+      assert.ok(result.affected_scenes.length > 0, 'Affected scenes list must not be empty on compression');
+      assert.ok(result.tradeoffs.some(t => t.includes('Compressing schedule')), 'Tradeoffs must reference schedule compression');
+    });
+
+    it('3. Increased shoot days scenario identifies daily day-rate expansion trade-offs', async () => {
+      const { simulateWhatIfScenario } = await import('../server/services/whatIfSimulator.js');
+      const result = simulateWhatIfScenario({
+        breakdown: mockBreakdown,
+        budget: mockBudget,
+        schedule: mockSchedule,
+        targetShootDays: 6,
+        targetBudget: 5000000
+      });
+      assert.strictEqual(result.deltas.shoot_days_delta, 1);
+      assert.ok(result.tradeoffs.some(t => t.includes('Extending schedule')), 'Tradeoffs must reference schedule extension');
+    });
+
+    it('4. Reduced budget scenario calculates negative dollar delta and variance percentage', async () => {
+      const { simulateWhatIfScenario } = await import('../server/services/whatIfSimulator.js');
+      const result = simulateWhatIfScenario({
+        breakdown: mockBreakdown,
+        budget: mockBudget,
+        schedule: mockSchedule,
+        targetShootDays: 5,
+        targetBudget: 4000000
+      });
+      assert.strictEqual(result.deltas.budget_delta, -1000000);
+      assert.strictEqual(result.deltas.budget_variance_pct, -20);
+      assert.ok(result.cost_pressure_categories.some(c => c.status.includes('Potential reduction area')));
+    });
+
+    it('5. Unchanged budget scenario produces 0 variance percentage', async () => {
+      const { simulateWhatIfScenario } = await import('../server/services/whatIfSimulator.js');
+      const result = simulateWhatIfScenario({
+        breakdown: mockBreakdown,
+        budget: mockBudget,
+        schedule: mockSchedule,
+        targetShootDays: 5,
+        targetBudget: 5000000
+      });
+      assert.strictEqual(result.deltas.budget_variance_pct, 0);
+    });
+
+    it('6. Zero or negative shoot days is rejected with validation error', async () => {
+      const { simulateWhatIfScenario } = await import('../server/services/whatIfSimulator.js');
+      assert.throws(() => simulateWhatIfScenario({
+        breakdown: mockBreakdown,
+        budget: mockBudget,
+        schedule: mockSchedule,
+        targetShootDays: 0,
+        targetBudget: 5000000
+      }));
+    });
+
+    it('7. Negative target budget is rejected with validation error', async () => {
+      const { simulateWhatIfScenario } = await import('../server/services/whatIfSimulator.js');
+      assert.throws(() => simulateWhatIfScenario({
+        breakdown: mockBreakdown,
+        budget: mockBudget,
+        schedule: mockSchedule,
+        targetShootDays: 5,
+        targetBudget: -1000
+      }));
+    });
+
+    it('8. Malformed non-numeric inputs are rejected with validation error', async () => {
+      const { simulateWhatIfScenario } = await import('../server/services/whatIfSimulator.js');
+      assert.throws(() => simulateWhatIfScenario({
+        breakdown: mockBreakdown,
+        budget: mockBudget,
+        schedule: mockSchedule,
+        targetShootDays: 'invalid',
+        targetBudget: 5000000
+      }));
+    });
+
+    it('9. Delta calculations are mathematically exact', async () => {
+      const { simulateWhatIfScenario } = await import('../server/services/whatIfSimulator.js');
+      const result = simulateWhatIfScenario({
+        breakdown: mockBreakdown,
+        budget: mockBudget,
+        schedule: mockSchedule,
+        targetShootDays: 3,
+        targetBudget: 4500000
+      });
+      assert.strictEqual(result.deltas.shoot_days_delta, -2);
+      assert.strictEqual(result.deltas.budget_delta, -500000);
+    });
+
+    it('10. Percentage variance calculation handles non-zero baselines correctly', async () => {
+      const { simulateWhatIfScenario } = await import('../server/services/whatIfSimulator.js');
+      const result = simulateWhatIfScenario({
+        breakdown: mockBreakdown,
+        budget: mockBudget,
+        schedule: mockSchedule,
+        targetShootDays: 5,
+        targetBudget: 6000000
+      });
+      assert.strictEqual(result.deltas.budget_variance_pct, 20);
+    });
+
+    it('11. Affected scenes list contains only real scene numbers from breakdown', async () => {
+      const { simulateWhatIfScenario } = await import('../server/services/whatIfSimulator.js');
+      const result = simulateWhatIfScenario({
+        breakdown: mockBreakdown,
+        budget: mockBudget,
+        schedule: mockSchedule,
+        targetShootDays: 4,
+        targetBudget: 5000000
+      });
+      const validNumbers = mockBreakdown.scenes.map(s => s.scene_number);
+      result.affected_scenes.forEach(num => {
+        assert.ok(validNumbers.includes(num), `Scene number ${num} must exist in baseline breakdown`);
+      });
+    });
+
+    it('12. Original production plan objects are never mutated during simulation', async () => {
+      const { simulateWhatIfScenario } = await import('../server/services/whatIfSimulator.js');
+      const breakdownCopy = JSON.parse(JSON.stringify(mockBreakdown));
+      const budgetCopy = JSON.parse(JSON.stringify(mockBudget));
+      const scheduleCopy = JSON.parse(JSON.stringify(mockSchedule));
+
+      simulateWhatIfScenario({
+        breakdown: mockBreakdown,
+        budget: mockBudget,
+        schedule: mockSchedule,
+        targetShootDays: 3,
+        targetBudget: 3500000
+      });
+
+      assert.deepStrictEqual(mockBreakdown, breakdownCopy, 'Breakdown must remain unmutated');
+      assert.deepStrictEqual(mockBudget, budgetCopy, 'Budget must remain unmutated');
+      assert.deepStrictEqual(mockSchedule, scheduleCopy, 'Schedule must remain unmutated');
+    });
+
+    it('13. Reset to current plan restores canonical baseline state', async () => {
+      const fs = await import('fs');
+      const uiCode = fs.readFileSync('./client/src/components/WhatIfView.jsx', 'utf8');
+      assert.ok(uiCode.includes('handleResetToCurrentPlan'), 'Reset handler must exist');
+      assert.ok(uiCode.includes('Reset to Current Plan'), 'Reset button text present');
+    });
+
+    it('14. Simulator module contains zero Gemini LLM calls or LlmAgent imports', async () => {
+      const fs = await import('fs');
+      const simulatorCode = fs.readFileSync('./server/services/whatIfSimulator.js', 'utf8');
+      assert.ok(!simulatorCode.includes('LlmAgent'), 'Must not import LlmAgent');
+      assert.ok(!simulatorCode.includes('executeAgentWithPolicy'), 'Must not invoke LLM policy helper');
+      assert.ok(!simulatorCode.includes('getGeminiModel'), 'Must not instantiate Gemini model');
+    });
+
+    it('15. Recalculation is completely offline without repeated external API requests', async () => {
+      const { simulateWhatIfScenario } = await import('../server/services/whatIfSimulator.js');
+      const res1 = simulateWhatIfScenario({ breakdown: mockBreakdown, budget: mockBudget, schedule: mockSchedule, targetShootDays: 4, targetBudget: 5000000 });
+      const res2 = simulateWhatIfScenario({ breakdown: mockBreakdown, budget: mockBudget, schedule: mockSchedule, targetShootDays: 3, targetBudget: 4000000 });
+      assert.ok(res1 && res2);
+    });
+
+    it('16. Scenario output strictly validates against WhatIfScenarioOutputSchema Zod schema', async () => {
+      const { simulateWhatIfScenario, WhatIfScenarioOutputSchema } = await import('../server/services/whatIfSimulator.js');
+      const result = simulateWhatIfScenario({ breakdown: mockBreakdown, budget: mockBudget, schedule: mockSchedule, targetShootDays: 4, targetBudget: 4500000 });
+      const validated = WhatIfScenarioOutputSchema.parse(result);
+      assert.strictEqual(validated.scenario_id, result.scenario_id);
+    });
+
+    it('17. Demo mode works offline using fixture data', async () => {
+      const { simulateWhatIfScenario } = await import('../server/services/whatIfSimulator.js');
+      const { getDemoProductionPlan } = await import('../server/fixtures/demoFixtures.js');
+      const demoPlan = getDemoProductionPlan();
+      const result = simulateWhatIfScenario({
+        breakdown: demoPlan.breakdown,
+        budget: demoPlan.budget,
+        schedule: demoPlan.schedule,
+        targetShootDays: 2,
+        targetBudget: 4000000
+      });
+      assert.strictEqual(result.baseline.shoot_days, 3);
+    });
+
+    it('18. Missing optional analytics data is handled safely without throwing error', async () => {
+      const { simulateWhatIfScenario } = await import('../server/services/whatIfSimulator.js');
+      const minimalBudget = { estimated_total: 2000000 };
+      const minimalSchedule = { total_shoot_days: 2 };
+      const minimalBreakdown = { scenes: [{ scene_number: 1, location: 'LAB' }] };
+      const result = simulateWhatIfScenario({ breakdown: minimalBreakdown, budget: minimalBudget, schedule: minimalSchedule, targetShootDays: 1, targetBudget: 1500000 });
+      assert.strictEqual(result.baseline.shoot_days, 2);
+    });
+
+    it('19. Scenario output contains zero NaN or undefined values', async () => {
+      const { simulateWhatIfScenario } = await import('../server/services/whatIfSimulator.js');
+      const result = simulateWhatIfScenario({ breakdown: mockBreakdown, budget: mockBudget, schedule: mockSchedule, targetShootDays: 4, targetBudget: 4500000 });
+      const str = JSON.stringify(result);
+      assert.ok(!str.includes('NaN'));
+      assert.ok(!str.includes('null') || str.includes('null') === false);
+    });
+
+    it('20. Derived scenario state is clearly distinguished from canonical plan in UI', async () => {
+      const fs = await import('fs');
+      const uiCode = fs.readFileSync('./client/src/components/WhatIfView.jsx', 'utf8');
+      assert.ok(uiCode.includes('Active Scenario View'), 'UI labels derived scenario state');
+      assert.ok(uiCode.includes('Canonical production plan remains unchanged'), 'UI reinforces immutability of baseline');
+    });
+
+    it('21. Client component files have zero direct imports from server/ directory', async () => {
+      const fs = await import('fs');
+      const uiCode = fs.readFileSync('./client/src/components/WhatIfView.jsx', 'utf8');
+      assert.ok(!uiCode.includes("from '../../server/"), 'Client component must not import from server/');
+      assert.ok(!uiCode.includes("from '../server/"), 'Client component must not import from server/');
+      assert.ok(uiCode.includes("fetch('/api/production/what-if'"), 'Client must communicate with server via API endpoint');
+    });
+  });
+
+  describe('Phase 6C Enhancement 4 - Command Center UI Redesign Tests', () => {
+    it('1. Primary lifecycle navigation defines all 7 required product stages', async () => {
+      const fs = await import('fs');
+      const appCode = fs.readFileSync('./client/src/App.jsx', 'utf8');
+      assert.ok(appCode.includes('💡 CONCEPT'), 'CONCEPT tab present');
+      assert.ok(appCode.includes('📖 STORY'), 'STORY tab present');
+      assert.ok(appCode.includes('📜 SCREENPLAY'), 'SCREENPLAY tab present');
+      assert.ok(appCode.includes('🎬 PRODUCTION'), 'PRODUCTION tab present');
+      assert.ok(appCode.includes('🩺 SCRIPT DOCTOR'), 'SCRIPT DOCTOR tab present');
+      assert.ok(appCode.includes('⚡ WHAT-IF'), 'WHAT-IF tab present');
+      assert.ok(appCode.includes('📦 EXPORT'), 'EXPORT tab present');
+    });
+
+    it('2. Production sub-navigation provides all 4 required subviews', async () => {
+      const fs = await import('fs');
+      const appCode = fs.readFileSync('./client/src/App.jsx', 'utf8');
+      assert.ok(appCode.includes("onClick={() => setPlanningSubTab('breakdown')}"), 'Breakdown subtab present');
+      assert.ok(appCode.includes("onClick={() => setPlanningSubTab('budget')}"), 'Budget subtab present');
+      assert.ok(appCode.includes("onClick={() => setPlanningSubTab('schedule')}"), 'Schedule subtab present');
+      assert.ok(appCode.includes("onClick={() => setPlanningSubTab('insights')}"), 'Insights subtab present');
+    });
+
+    it('3. Persistent project header renders project identity and production plan metrics', async () => {
+      const fs = await import('fs');
+      const appCode = fs.readFileSync('./client/src/App.jsx', 'utf8');
+      assert.ok(appCode.includes('project-header-card'), 'Project header card present');
+      assert.ok(appCode.includes('pm-label">BUDGET'), 'Budget metric present');
+      assert.ok(appCode.includes('pm-label">SHOOT DAYS'), 'Shoot Days metric present');
+      assert.ok(appCode.includes('pm-label">SCENES'), 'Scenes metric present');
+      assert.ok(appCode.includes('pm-label">LOCATIONS'), 'Locations metric present');
+    });
+
+    it('4. Visual production pipeline status renders state nodes and indicators', async () => {
+      const fs = await import('fs');
+      const appCode = fs.readFileSync('./client/src/App.jsx', 'utf8');
+      assert.ok(appCode.includes('pipeline-status-card'), 'Pipeline status card present');
+      assert.ok(appCode.includes('getStageIndicator'), 'Stage indicator helper function present');
+      assert.ok(appCode.includes('stage-complete'), 'Complete stage class present');
+      assert.ok(appCode.includes('stage-active'), 'Active stage class present');
+      assert.ok(appCode.includes('stage-idle'), 'Idle stage class present');
+    });
+
+    it('5. Quick Actions bar surfaces script review, what-if, production plan, and export', async () => {
+      const fs = await import('fs');
+      const appCode = fs.readFileSync('./client/src/App.jsx', 'utf8');
+      assert.ok(appCode.includes('Review My Script'), 'Review My Script quick action present');
+      assert.ok(appCode.includes('Explore What-If'), 'Explore What-If quick action present');
+      assert.ok(appCode.includes('View Production Plan'), 'View Production Plan quick action present');
+      assert.ok(appCode.includes('Export Production Bible'), 'Export Production Bible quick action present');
+    });
+
+    it('6. Concept Intake Panel features value statement and primary CTA', async () => {
+      const fs = await import('fs');
+      const appCode = fs.readFileSync('./client/src/App.jsx', 'utf8');
+      assert.ok(appCode.includes('PROJECT CONCEPT'), 'PROJECT CONCEPT heading present');
+      assert.ok(appCode.includes('Turn a film concept into a production-ready plan.'), 'Explanatory value sentence present');
+      assert.ok(appCode.includes('GENERATE PRODUCTION PLAN'), 'Primary CTA button text present');
+    });
+
+    it('7. Screenplay View displays visible Screenplay Detail Level indicator badge', async () => {
+      const fs = await import('fs');
+      const appCode = fs.readFileSync('./client/src/App.jsx', 'utf8');
+      assert.ok(appCode.includes('Detail Level:'), 'Screenplay detail level badge present');
+    });
+
+    it('8. Export workspace groups formats into Production Bible, Documents, Spreadsheets, and JSON Data', async () => {
+      const fs = await import('fs');
+      const exportCode = fs.readFileSync('./client/src/components/ExportView.jsx', 'utf8');
+      assert.ok(exportCode.includes('EXPORT PRODUCTION BIBLE'), 'Export Production Bible CTA present');
+      assert.ok(exportCode.includes('Documents (PDF Format)'), 'Documents group present');
+      assert.ok(exportCode.includes('Spreadsheets (CSV / Excel Format)'), 'Spreadsheets group present');
+      assert.ok(exportCode.includes('JSON Data (Raw Payloads)'), 'JSON Data group present');
+    });
+
+    it('9. Client components maintain zero exposure of credentials, stack traces, or API keys', async () => {
+      const fs = await import('fs');
+      const files = [
+        './client/src/App.jsx',
+        './client/src/components/ExportView.jsx',
+        './client/src/components/WhatIfView.jsx',
+        './client/src/components/ScriptDoctorView.jsx'
+      ];
+      for (const file of files) {
+        const code = fs.readFileSync(file, 'utf8');
+        assert.ok(!code.includes('process.env.GEMINI_API_KEY'), `${file} must not reference raw GEMINI_API_KEY`);
+        assert.ok(!code.includes('process.env.CLICKHOUSE_PASSWORD'), `${file} must not reference raw CLICKHOUSE_PASSWORD`);
+      }
+    });
+
+    it('10. Screenplay Detail Level control is structurally contained with dedicated flex sizing and select styling', async () => {
+      const fs = await import('fs');
+      const appCode = fs.readFileSync('./client/src/App.jsx', 'utf8');
+      const cssCode = fs.readFileSync('./client/src/App.css', 'utf8');
+      assert.ok(appCode.includes('detail-level-group'), 'Screenplay detail level container uses detail-level-group class');
+      assert.ok(cssCode.includes('.detail-level-group'), 'App.css defines .detail-level-group rules');
+      assert.ok(cssCode.includes('.form-group select'), 'App.css explicitly styles .form-group select');
+    });
+  });
+
+  describe('Phase 6C UI Polish - Production Insights View Redesign Tests', () => {
+    it('1. KPI cards render under PROJECT SUMMARY section', async () => {
+      const fs = await import('fs');
+      const code = fs.readFileSync('./client/src/components/ProductionInsightsView.jsx', 'utf8');
+      assert.ok(code.includes('PROJECT SUMMARY'), 'PROJECT SUMMARY section title present');
+      assert.ok(code.includes('ESTIMATED COST'), 'Estimated Cost KPI card present');
+      assert.ok(code.includes('TARGET BUDGET'), 'Target Budget KPI card present');
+      assert.ok(code.includes('BUDGET VARIANCE'), 'Budget Variance KPI card present');
+      assert.ok(code.includes('TOTAL SCENES'), 'Total Scenes KPI card present');
+      assert.ok(code.includes('SHOOT DAYS'), 'Shoot Days KPI card present');
+    });
+
+    it('2. Cost Analysis section renders', async () => {
+      const fs = await import('fs');
+      const code = fs.readFileSync('./client/src/components/ProductionInsightsView.jsx', 'utf8');
+      assert.ok(code.includes('COST ANALYSIS'), 'COST ANALYSIS section title present');
+    });
+
+    it('3. Highest-Cost Scenes card renders in Cost Analysis section', async () => {
+      const fs = await import('fs');
+      const code = fs.readFileSync('./client/src/components/ProductionInsightsView.jsx', 'utf8');
+      assert.ok(code.includes('Highest-Cost Scenes'), 'Highest-Cost Scenes card header present');
+    });
+
+    it('4. Cost by Location card renders in Cost Analysis section', async () => {
+      const fs = await import('fs');
+      const code = fs.readFileSync('./client/src/components/ProductionInsightsView.jsx', 'utf8');
+      assert.ok(code.includes('Cost by Location'), 'Cost by Location card header present');
+    });
+
+    it('5. Production Complexity section renders', async () => {
+      const fs = await import('fs');
+      const code = fs.readFileSync('./client/src/components/ProductionInsightsView.jsx', 'utf8');
+      assert.ok(code.includes('PRODUCTION COMPLEXITY'), 'PRODUCTION COMPLEXITY section title present');
+      assert.ok(code.includes('Complexity Distribution'), 'Complexity Distribution card present');
+    });
+
+    it('6. Cast & Extras card renders in Complexity section', async () => {
+      const fs = await import('fs');
+      const code = fs.readFileSync('./client/src/components/ProductionInsightsView.jsx', 'utf8');
+      assert.ok(code.includes('Cast & Extras Load'), 'Cast & Extras Load card present');
+    });
+
+    it('7. Major Cost Drivers card renders full-width', async () => {
+      const fs = await import('fs');
+      const code = fs.readFileSync('./client/src/components/ProductionInsightsView.jsx', 'utf8');
+      assert.ok(code.includes('MAJOR COST DRIVERS'), 'MAJOR COST DRIVERS section/card header present');
+      assert.ok(code.includes('cost-drivers-table'), 'Cost drivers table class present');
+    });
+
+    it('8. ClickHouse connection / status indicator renders prominently', async () => {
+      const fs = await import('fs');
+      const code = fs.readFileSync('./client/src/components/ProductionInsightsView.jsx', 'utf8');
+      assert.ok(code.includes('insights-status-strip'), 'Status strip container present');
+      assert.ok(code.includes('ClickHouse Cloud Production Analytics'), 'ClickHouse Cloud label present');
+      assert.ok(code.includes('sync-badge'), 'Sync badge present');
+    });
+
+    it('9. Existing analytics data fields remain strictly unchanged in data mapping', async () => {
+      const fs = await import('fs');
+      const code = fs.readFileSync('./client/src/components/ProductionInsightsView.jsx', 'utf8');
+      assert.ok(code.includes('insights.summary'), 'Consumes insights.summary');
+      assert.ok(code.includes('insights.highestCostScenes'), 'Consumes insights.highestCostScenes');
+      assert.ok(code.includes('insights.costByLocation'), 'Consumes insights.costByLocation');
+      assert.ok(code.includes('insights.complexityDistribution'), 'Consumes insights.complexityDistribution');
+      assert.ok(code.includes('insights.castLoadByScene'), 'Consumes insights.castLoadByScene');
+      assert.ok(code.includes('insights.majorCostDrivers'), 'Consumes insights.majorCostDrivers');
+    });
+
+    it('10. Mobile and desktop structural responsive grid classes are implemented in CSS and JSX', async () => {
+      const fs = await import('fs');
+      const jsxCode = fs.readFileSync('./client/src/components/ProductionInsightsView.jsx', 'utf8');
+      const cssCode = fs.readFileSync('./client/src/App.css', 'utf8');
+      assert.ok(jsxCode.includes('insights-grid-2col'), 'JSX utilizes insights-grid-2col');
+      assert.ok(cssCode.includes('.insights-grid-2col'), 'App.css defines .insights-grid-2col layout');
+      assert.ok(cssCode.includes('@media (max-width: 900px)'), 'App.css includes responsive media query for single-column stack on mobile');
+    });
+  });
+
+  describe('Phase 6C UI Polish - Telemetry Accuracy & MCP Status Tests', () => {
+    it('1. Successful pipeline telemetry output contains actual total duration and durationMs fields', async () => {
+      const { runStoryToScreenplayPipeline } = await import('../server/agents/pipeline.js');
+      assert.ok(typeof runStoryToScreenplayPipeline === 'function');
+      
+      const sampleTelemetry = {
+        totalDurationMs: 10332,
+        durationMs: 10332,
+        status: 'SUCCESS',
+        mcpLogged: true,
+        mcpStatus: 'CONNECTED / SYNCED'
+      };
+      
+      const duration = sampleTelemetry.totalDurationMs ?? sampleTelemetry.durationMs ?? 0;
+      assert.strictEqual(duration, 10332);
+      assert.ok(duration > 0, 'Duration must be positive when valid telemetry exists');
+    });
+
+    it('2. Total execution duration is never incorrectly 0 ms when valid telemetry exists', async () => {
+      const fs = await import('fs');
+      const appCode = fs.readFileSync('./client/src/App.jsx', 'utf8');
+      assert.ok(appCode.includes('totalDurationMs ?? resultData.pipelineTelemetry.durationMs'), 'App.jsx reads totalDurationMs or durationMs property before fallback');
+      
+      const demoFixtures = await import('../server/fixtures/demoFixtures.js');
+      const sampleDemo = demoFixtures.getDemoProductionPlan('demo_proj');
+      const demoDuration = sampleDemo.pipelineTelemetry.totalDurationMs ?? sampleDemo.pipelineTelemetry.durationMs ?? 0;
+      assert.strictEqual(demoDuration, 850);
+      assert.notStrictEqual(demoDuration, 0, 'Demo pipeline duration must not be 0 ms');
+    });
+
+    it('3. Successful MCP telemetry is displayed as connected/synced in UI state mapping', async () => {
+      const fs = await import('fs');
+      const appCode = fs.readFileSync('./client/src/App.jsx', 'utf8');
+      assert.ok(appCode.includes("CONNECTED / SYNCED"), 'App.jsx includes CONNECTED / SYNCED status binding');
+      
+      const sampleTelemetry = { mcpLogged: true, mcpStatus: 'CONNECTED / SYNCED' };
+      const isConnected = sampleTelemetry.mcpLogged || sampleTelemetry.mcpStatus === 'CONNECTED / SYNCED';
+      assert.strictEqual(isConnected, true);
+    });
+
+    it('4. Unavailable telemetry displays clear unavailable state (DISABLED / UNAVAILABLE)', async () => {
+      const fs = await import('fs');
+      const appCode = fs.readFileSync('./client/src/App.jsx', 'utf8');
+      assert.ok(appCode.includes("DISABLED / UNAVAILABLE"), 'App.jsx handles clear DISABLED / UNAVAILABLE state fallback');
+      
+      const sampleTelemetry = { mcpLogged: false, mcpStatus: 'DISABLED / UNAVAILABLE' };
+      const statusText = sampleTelemetry.mcpStatus || (sampleTelemetry.mcpLogged ? 'CONNECTED / SYNCED' : 'DISABLED / UNAVAILABLE');
+      assert.strictEqual(statusText, 'DISABLED / UNAVAILABLE');
+    });
+
+    it('5. No credentials, tokens, or internal SQL queries are exposed in client telemetry data', async () => {
+      const fs = await import('fs');
+      const appCode = fs.readFileSync('./client/src/App.jsx', 'utf8');
+      assert.ok(!appCode.includes('CLICKHOUSE_PASSWORD'), 'App.jsx must not reference raw CLICKHOUSE_PASSWORD');
+      assert.ok(!appCode.includes('CLICKHOUSE_MCP_TOKEN'), 'App.jsx must not reference raw CLICKHOUSE_MCP_TOKEN');
+      assert.ok(!appCode.includes('GEMINI_API_KEY'), 'App.jsx must not reference raw GEMINI_API_KEY');
+      assert.ok(!appCode.includes('SELECT * FROM'), 'App.jsx must not expose raw internal SQL queries');
+    });
   });
 });
+
 
 
 

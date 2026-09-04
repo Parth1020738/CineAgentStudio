@@ -100,7 +100,7 @@ export default function ExportView({ productionPlan, isDemoData }) {
       <section className="card export-header-card">
         <div className="card-header">
           <div>
-            <h2>Export Production Package</h2>
+            <h2>EXPORT PRODUCTION BIBLE</h2>
             <p className="section-subtitle">
               Download your screenplay, production breakdown, budget, shooting schedule, and production insights for sharing, review, or archival.
             </p>
@@ -202,7 +202,7 @@ export default function ExportView({ productionPlan, isDemoData }) {
                 </>
               ) : (
                 <>
-                  📥 Download Production Bible
+                  📥 EXPORT PRODUCTION BIBLE
                 </>
               )}
             </button>
@@ -210,16 +210,28 @@ export default function ExportView({ productionPlan, isDemoData }) {
         </div>
       </section>
 
-      {/* Individual Component Export Cards Grid */}
-      <div className="export-cards-grid">
-        {/* Card 1: Screenplay */}
-        <div className="card export-item-card">
-          <div className="export-card-header">
-            <span className="item-icon">📜</span>
-            <h4>Screenplay</h4>
-          </div>
-          <p className="item-desc">Formatted script for reading and sharing.</p>
-          <div className="format-buttons">
+      {/* Format Grouping Section Header */}
+      <div style={{ marginTop: '32px', marginBottom: '16px' }}>
+        <h3 style={{ color: '#f3f4f6', fontSize: '1.2rem', fontWeight: '700', margin: 0 }}>
+          EXPORT BY CATEGORY & FORMAT
+        </h3>
+        <p style={{ color: '#9ca3af', fontSize: '0.85rem', margin: '4px 0 0 0' }}>
+          Select specific document, spreadsheet, or JSON data payloads for individual department pipelines.
+        </p>
+      </div>
+
+      {/* Group 2: Documents (PDF Format) */}
+      <div style={{ marginBottom: '24px' }}>
+        <h4 style={{ color: '#60a5fa', fontSize: '0.95rem', letterSpacing: '0.05em', marginBottom: '12px', textTransform: 'uppercase' }}>
+          Documents (PDF Format)
+        </h4>
+        <div className="export-cards-grid">
+          <div className="card export-item-card">
+            <div className="export-card-header">
+              <span className="item-icon">📜</span>
+              <h4>Screenplay Document</h4>
+            </div>
+            <p className="item-desc">Formatted screenplay PDF formatted for table reads.</p>
             <button
               type="button"
               className="format-btn pdf-btn"
@@ -227,57 +239,16 @@ export default function ExportView({ productionPlan, isDemoData }) {
               disabled={downloadingType !== null}
               aria-label="Download Screenplay PDF"
             >
-              {downloadingType === 'SCREENPLAY_PDF' ? 'Preparing export...' : '📄 PDF'}
-            </button>
-            <button
-              type="button"
-              className="format-btn json-btn"
-              onClick={() => handleDownload('SCREENPLAY', 'Screenplay JSON')}
-              disabled={downloadingType !== null}
-              aria-label="Download Screenplay JSON"
-            >
-              {downloadingType === 'SCREENPLAY' ? 'Preparing export...' : '{ } JSON'}
+              {downloadingType === 'SCREENPLAY_PDF' ? 'Preparing...' : '📄 Download Screenplay PDF'}
             </button>
           </div>
-        </div>
 
-        {/* Card 2: Production Breakdown */}
-        <div className="card export-item-card">
-          <div className="export-card-header">
-            <span className="item-icon">📋</span>
-            <h4>Production Breakdown</h4>
-          </div>
-          <p className="item-desc">Scene-level production elements and requirements.</p>
-          <div className="format-buttons">
-            <button
-              type="button"
-              className="format-btn csv-btn"
-              onClick={() => handleDownload('BREAKDOWN_CSV', 'Breakdown CSV')}
-              disabled={downloadingType !== null}
-              aria-label="Download Breakdown CSV"
-            >
-              {downloadingType === 'BREAKDOWN_CSV' ? 'Preparing export...' : '📊 CSV'}
-            </button>
-            <button
-              type="button"
-              className="format-btn json-btn"
-              onClick={() => handleDownload('BREAKDOWN', 'Breakdown JSON')}
-              disabled={downloadingType !== null}
-              aria-label="Download Breakdown JSON"
-            >
-              {downloadingType === 'BREAKDOWN' ? 'Preparing export...' : '{ } JSON'}
-            </button>
-          </div>
-        </div>
-
-        {/* Card 3: Budget */}
-        <div className="card export-item-card">
-          <div className="export-card-header">
-            <span className="item-icon">💰</span>
-            <h4>Budget</h4>
-          </div>
-          <p className="item-desc">Budget allocation, scene costs, and reconciliation.</p>
-          <div className="format-buttons">
+          <div className="card export-item-card">
+            <div className="export-card-header">
+              <span className="item-icon">💰</span>
+              <h4>Budget Document</h4>
+            </div>
+            <p className="item-desc">Full line-item budget breakdown PDF with reconciliation notes.</p>
             <button
               type="button"
               className="format-btn pdf-btn"
@@ -285,37 +256,16 @@ export default function ExportView({ productionPlan, isDemoData }) {
               disabled={downloadingType !== null}
               aria-label="Download Budget PDF"
             >
-              {downloadingType === 'BUDGET_PDF' ? 'Preparing export...' : '📄 PDF'}
-            </button>
-            <button
-              type="button"
-              className="format-btn xlsx-btn"
-              onClick={() => handleDownload('BUDGET_XLSX', 'Budget Excel / Spreadsheet CSV')}
-              disabled={downloadingType !== null}
-              aria-label="Download Budget Excel / Spreadsheet CSV"
-            >
-              {downloadingType === 'BUDGET_XLSX' ? 'Preparing export...' : '📊 Excel / Spreadsheet CSV'}
-            </button>
-            <button
-              type="button"
-              className="format-btn json-btn"
-              onClick={() => handleDownload('BUDGET', 'Budget JSON')}
-              disabled={downloadingType !== null}
-              aria-label="Download Budget JSON"
-            >
-              {downloadingType === 'BUDGET' ? 'Preparing export...' : '{ } JSON'}
+              {downloadingType === 'BUDGET_PDF' ? 'Preparing...' : '📄 Download Budget PDF'}
             </button>
           </div>
-        </div>
 
-        {/* Card 4: Shooting Schedule */}
-        <div className="card export-item-card">
-          <div className="export-card-header">
-            <span className="item-icon">📅</span>
-            <h4>Shooting Schedule</h4>
-          </div>
-          <p className="item-desc">Shooting days, locations, cast, and production risks.</p>
-          <div className="format-buttons">
+          <div className="card export-item-card">
+            <div className="export-card-header">
+              <span className="item-icon">📅</span>
+              <h4>Schedule Document</h4>
+            </div>
+            <p className="item-desc">Day-by-day shooting stripboard schedule PDF.</p>
             <button
               type="button"
               className="format-btn pdf-btn"
@@ -323,17 +273,134 @@ export default function ExportView({ productionPlan, isDemoData }) {
               disabled={downloadingType !== null}
               aria-label="Download Schedule PDF"
             >
-              {downloadingType === 'SCHEDULE_PDF' ? 'Preparing export...' : '📄 PDF'}
+              {downloadingType === 'SCHEDULE_PDF' ? 'Preparing...' : '📄 Download Schedule PDF'}
             </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Group 3: Spreadsheets (CSV / Excel Format) */}
+      <div style={{ marginBottom: '24px' }}>
+        <h4 style={{ color: '#10b981', fontSize: '0.95rem', letterSpacing: '0.05em', marginBottom: '12px', textTransform: 'uppercase' }}>
+          Spreadsheets (CSV / Excel Format)
+        </h4>
+        <div className="export-cards-grid">
+          <div className="card export-item-card">
+            <div className="export-card-header">
+              <span className="item-icon">📋</span>
+              <h4>Breakdown Spreadsheet</h4>
+            </div>
+            <p className="item-desc">Scene-by-scene breakdown elements sheet in CSV format.</p>
+            <button
+              type="button"
+              className="format-btn csv-btn"
+              onClick={() => handleDownload('BREAKDOWN_CSV', 'Breakdown CSV')}
+              disabled={downloadingType !== null}
+              aria-label="Download Breakdown CSV"
+            >
+              {downloadingType === 'BREAKDOWN_CSV' ? 'Preparing...' : '📊 Download Breakdown CSV'}
+            </button>
+          </div>
+
+          <div className="card export-item-card">
+            <div className="export-card-header">
+              <span className="item-icon">💰</span>
+              <h4>Budget Spreadsheet</h4>
+            </div>
+            <p className="item-desc">Category & scene budget calculations sheet in Excel CSV format.</p>
             <button
               type="button"
               className="format-btn xlsx-btn"
-              onClick={() => handleDownload('SCHEDULE_XLSX', 'Schedule Excel / Spreadsheet CSV')}
+              onClick={() => handleDownload('BUDGET_XLSX', 'Budget Spreadsheet CSV')}
               disabled={downloadingType !== null}
-              aria-label="Download Schedule Excel / Spreadsheet CSV"
+              aria-label="Download Budget Spreadsheet CSV"
             >
-              {downloadingType === 'SCHEDULE_XLSX' ? 'Preparing export...' : '📊 Excel / Spreadsheet CSV'}
+              {downloadingType === 'BUDGET_XLSX' ? 'Preparing...' : '📊 Download Budget CSV'}
             </button>
+          </div>
+
+          <div className="card export-item-card">
+            <div className="export-card-header">
+              <span className="item-icon">📅</span>
+              <h4>Schedule Spreadsheet</h4>
+            </div>
+            <p className="item-desc">Day-by-day shoot roster and scene allocation sheet in CSV format.</p>
+            <button
+              type="button"
+              className="format-btn xlsx-btn"
+              onClick={() => handleDownload('SCHEDULE_XLSX', 'Schedule Spreadsheet CSV')}
+              disabled={downloadingType !== null}
+              aria-label="Download Schedule Spreadsheet CSV"
+            >
+              {downloadingType === 'SCHEDULE_XLSX' ? 'Preparing...' : '📊 Download Schedule CSV'}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Group 4: JSON Data (Raw Payloads) */}
+      <div style={{ marginBottom: '24px' }}>
+        <h4 style={{ color: '#fbbf24', fontSize: '0.95rem', letterSpacing: '0.05em', marginBottom: '12px', textTransform: 'uppercase' }}>
+          JSON Data (Raw Payloads)
+        </h4>
+        <div className="export-cards-grid">
+          <div className="card export-item-card">
+            <div className="export-card-header">
+              <span className="item-icon">📜</span>
+              <h4>Screenplay JSON</h4>
+            </div>
+            <p className="item-desc">Structured scene & dialogue schema.</p>
+            <button
+              type="button"
+              className="format-btn json-btn"
+              onClick={() => handleDownload('SCREENPLAY', 'Screenplay JSON')}
+              disabled={downloadingType !== null}
+              aria-label="Download Screenplay JSON"
+            >
+              {downloadingType === 'SCREENPLAY' ? 'Preparing...' : '{ } Screenplay JSON'}
+            </button>
+          </div>
+
+          <div className="card export-item-card">
+            <div className="export-card-header">
+              <span className="item-icon">📋</span>
+              <h4>Breakdown JSON</h4>
+            </div>
+            <p className="item-desc">Structured scene breakdown schema.</p>
+            <button
+              type="button"
+              className="format-btn json-btn"
+              onClick={() => handleDownload('BREAKDOWN', 'Breakdown JSON')}
+              disabled={downloadingType !== null}
+              aria-label="Download Breakdown JSON"
+            >
+              {downloadingType === 'BREAKDOWN' ? 'Preparing...' : '{ } Breakdown JSON'}
+            </button>
+          </div>
+
+          <div className="card export-item-card">
+            <div className="export-card-header">
+              <span className="item-icon">💰</span>
+              <h4>Budget JSON</h4>
+            </div>
+            <p className="item-desc">Structured financial & category model.</p>
+            <button
+              type="button"
+              className="format-btn json-btn"
+              onClick={() => handleDownload('BUDGET', 'Budget JSON')}
+              disabled={downloadingType !== null}
+              aria-label="Download Budget JSON"
+            >
+              {downloadingType === 'BUDGET' ? 'Preparing...' : '{ } Budget JSON'}
+            </button>
+          </div>
+
+          <div className="card export-item-card">
+            <div className="export-card-header">
+              <span className="item-icon">📅</span>
+              <h4>Schedule JSON</h4>
+            </div>
+            <p className="item-desc">Structured shoot timeline model.</p>
             <button
               type="button"
               className="format-btn json-btn"
@@ -341,19 +408,16 @@ export default function ExportView({ productionPlan, isDemoData }) {
               disabled={downloadingType !== null}
               aria-label="Download Schedule JSON"
             >
-              {downloadingType === 'SCHEDULE' ? 'Preparing export...' : '{ } JSON'}
+              {downloadingType === 'SCHEDULE' ? 'Preparing...' : '{ } Schedule JSON'}
             </button>
           </div>
-        </div>
 
-        {/* Card 5: Production Insights */}
-        <div className="card export-item-card">
-          <div className="export-card-header">
-            <span className="item-icon">📊</span>
-            <h4>Production Insights</h4>
-          </div>
-          <p className="item-desc">Production analytics and cost intelligence.</p>
-          <div className="format-buttons">
+          <div className="card export-item-card">
+            <div className="export-card-header">
+              <span className="item-icon">📊</span>
+              <h4>Insights JSON</h4>
+            </div>
+            <p className="item-desc">ClickHouse production metrics dataset.</p>
             <button
               type="button"
               className="format-btn json-btn"
@@ -361,7 +425,7 @@ export default function ExportView({ productionPlan, isDemoData }) {
               disabled={downloadingType !== null}
               aria-label="Download Production Insights JSON"
             >
-              {downloadingType === 'INSIGHTS' ? 'Preparing export...' : '{ } JSON'}
+              {downloadingType === 'INSIGHTS' ? 'Preparing...' : '{ } Insights JSON'}
             </button>
           </div>
         </div>

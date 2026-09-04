@@ -3,7 +3,10 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import { runStoryAgent, runAdkWithClickHouseMcp } from './agents/storyAgent.js';
 import { runStoryToScreenplayPipeline, runFullProductionPipeline } from './agents/pipeline.js';
+import { runScriptDoctorAgent } from './agents/scriptDoctorAgent.js';
+import { simulateWhatIfScenario } from './services/whatIfSimulator.js';
 import {
+  ensureProductionAnalyticsSchema,
   recordProductionAnalytics,
   getProjectProductionSummary,
   getHighestCostScenes,
@@ -97,7 +100,7 @@ app.post('/api/story', async (req, res) => {
 
 // Trigger full Multi-Agent Story -> Screenplay Production Pipeline
 app.post('/api/pipeline/story-to-screenplay', async (req, res) => {
-  const { title, genre, logline, tone, targetBudget, projectId } = req.body || {};
+  const { title, genre, logline, tone, targetBudget, projectId, screenplayDetail } = req.body || {};
 
   if (!title || typeof title !== 'string' || !title.trim()) {
     return res.status(400).json({ error: 'Title is required and must be a non-empty string.' });
@@ -130,6 +133,7 @@ app.post('/api/pipeline/story-to-screenplay', async (req, res) => {
       logline: logline.trim(),
       tone: tone ? String(tone).trim() : 'Cinematic',
       targetBudget: targetBudget ? String(targetBudget).trim() : '5000000',
+      screenplayDetail: screenplayDetail ? String(screenplayDetail).trim() : 'cinematic',
       projectId: projectId ? String(projectId).trim() : undefined
     });
 
@@ -159,7 +163,7 @@ app.post('/api/pipeline/story-to-screenplay', async (req, res) => {
 
 // Trigger full 5-Agent Production Planning Pipeline (Story -> Screenplay -> Breakdown -> Budget -> Schedule -> ClickHouse Analytics)
 app.post('/api/pipeline/production-plan', async (req, res) => {
-  const { title, genre, logline, tone, targetBudget, targetShootDays, projectId } = req.body || {};
+  const { title, genre, logline, tone, targetBudget, targetShootDays, projectId, screenplayDetail } = req.body || {};
 
   if (!title || typeof title !== 'string' || !title.trim()) {
     return res.status(400).json({ error: 'Title is required and must be a non-empty string.' });
@@ -195,6 +199,7 @@ app.post('/api/pipeline/production-plan', async (req, res) => {
       tone: tone ? String(tone).trim() : 'Cinematic',
       targetBudget: targetBudget ? String(targetBudget).trim() : '5000000',
       targetShootDays: targetShootDays ? String(targetShootDays).trim() : undefined,
+      screenplayDetail: screenplayDetail ? String(screenplayDetail).trim() : 'cinematic',
       projectId: projectId ? String(projectId).trim() : undefined
     });
 
@@ -445,6 +450,94 @@ app.post('/api/adk-mcp-test', async (req, res) => {
   }
 });
 
+/**
+ * POST /api/script-doctor/review
+ * Runs the Script Doctor Agent to perform an editorial pass on the provided screenplay.
+ * ADVISORY ONLY - DOES NOT ALTER THE SCREENPLAY.
+ */
+app.post('/api/script-doctor/review', async (req, res) => {
+  try {
+    const { screenplay } = req.body;
+    if (!screenplay || typeof screenplay !== 'object') {
+      return res.status(400).json({ error: 'A valid screenplay object is required for Script Doctor review.' });
+    }
+
+    if (isDemoModeEnabled()) {
+      console.log('[Script Doctor Endpoint] Demo mode enabled. Returning demo script doctor assessment.');
+      const demoResult = {
+        overall_score: 84,
+        category_scores: {
+          structure: 88,
+          pacing: 82,
+          character_arcs: 80,
+          dialogue: 85,
+          conflict: 86,
+          scene_effectiveness: 84,
+          production_feasibility: 83
+        },
+        strengths: [
+          'High visual tension and vivid environmental atmosphere across all scene headings.',
+          'Strong character motivation and clear conflict stakes between Silas and Maya.',
+          'Atmospheric location setups with strong visual action beats.'
+        ],
+        issues: [
+          'Rapid scene progression leaves minimal quiet moments for emotional breathing space.',
+          'Scene 2 action block contains multiple heavy visual elements requiring tight coordination.'
+        ],
+        recommendations: [
+          'Introduce a 2-line reflective dialogue beat between Silas and Maya before the climax.',
+          'Simplify secondary prop requirements in Scene 2 to reduce set setup time.'
+        ]
+      };
+      return res.json({ status: 'success', data: demoResult });
+    }
+
+    const reviewResult = await runScriptDoctorAgent({ screenplay });
+    return res.json({ status: 'success', data: reviewResult });
+  } catch (err) {
+    console.error('[Script Doctor Endpoint Error]:', err.message);
+    if (is429RateLimitError && is429RateLimitError(err)) {
+      return res.status(429).json({
+        error: 'Gemini API is temporarily rate-limited. Please wait a short moment and try again.'
+      });
+    }
+    return res.status(500).json({
+      error: 'Failed to perform Script Doctor review.',
+      details: err.message ? err.message.replace(/AIZA[0-9A-Za-z-_]{35}/g, '[REDACTED]') : 'Internal error'
+    });
+  }
+});
+
+/**
+ * POST /api/production/what-if
+ * Deterministically simulates what-if production scenarios for shoot days and budget constraints.
+ * DECISION-SUPPORT TOOL — DOES NOT CALL GEMINI OR OVERWRITE CANONICAL PLAN.
+ */
+app.post('/api/production/what-if', (req, res) => {
+  try {
+    const { breakdown, budget, schedule, targetShootDays, targetBudget } = req.body;
+    if (!breakdown || !budget || !schedule) {
+      return res.status(400).json({ error: 'Breakdown, budget, and schedule objects are required for scenario simulation.' });
+    }
+
+    const scenarioResult = simulateWhatIfScenario({
+      breakdown,
+      budget,
+      schedule,
+      targetShootDays,
+      targetBudget
+    });
+
+    return res.json({ status: 'success', data: scenarioResult });
+  } catch (err) {
+    console.error('[What-If Endpoint Error]:', err.message);
+    return res.status(400).json({
+      error: 'Failed to compute what-if scenario.',
+      details: err.message
+    });
+  }
+});
+
 // SPA Fallback Handler for React Frontend Routes (Express 5 compatible)
 if (fs.existsSync(clientDistPath)) {
   app.get('/{*splat}', (req, res) => {
@@ -458,6 +551,11 @@ if (fs.existsSync(clientDistPath)) {
 const server = app.listen(PORT, '0.0.0.0', () => {
   console.log(`CineAgent Studio backend server running on port ${PORT}`);
   logGeminiConfig();
+  if (validateClickHouseConfig()) {
+    ensureProductionAnalyticsSchema().catch((err) => {
+      console.warn(`[ClickHouse Startup Migration Warning] ${err.message}`);
+    });
+  }
 });
 
 process.on('SIGTERM', async () => {

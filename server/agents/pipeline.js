@@ -4,6 +4,7 @@ import { runBreakdownAgent } from './breakdownAgent.js';
 import { runBudgetAgent } from './budgetAgent.js';
 import { runScheduleAgent, validateScheduleFidelity } from './scheduleAgent.js';
 import { recordProductionAnalytics } from '../services/productionAnalytics.js';
+import { validateClickHouseConfig } from '../mcp/clickhouseMcp.js';
 
 /**
  * Maps structured Story Agent output and concept inputs to valid Screenplay Agent input contract.
@@ -36,7 +37,8 @@ export function mapStoryToScreenplayInput(storyPackage, conceptInputs = {}) {
     tone: conceptInputs.tone || 'N/A',
     synopsis: validatedStory.synopsis,
     three_act_structure: validatedStory.three_act_structure,
-    characters: validatedStory.characters
+    characters: validatedStory.characters,
+    screenplayDetail: conceptInputs.screenplayDetail || 'cinematic'
   };
 
   // Validate against ScreenplayInputSchema
@@ -128,6 +130,8 @@ export async function runStoryToScreenplayPipeline(conceptInputs) {
   const totalDurationMs = Date.now() - pipelineStartTime;
   console.log(`[Pipeline] Multi-Agent Pipeline completed successfully in ${totalDurationMs}ms.`);
 
+  const isMcpConfigured = validateClickHouseConfig();
+
   return {
     storyPackage,
     screenplay: screenplayOutput,
@@ -135,7 +139,10 @@ export async function runStoryToScreenplayPipeline(conceptInputs) {
       storyDurationMs: storyPackage.telemetry ? storyPackage.telemetry.durationMs : 0,
       screenplayDurationMs,
       totalDurationMs,
-      status: 'SUCCESS'
+      durationMs: totalDurationMs,
+      status: 'SUCCESS',
+      mcpLogged: isMcpConfigured,
+      mcpStatus: isMcpConfigured ? 'CONNECTED / SYNCED' : 'DISABLED / UNAVAILABLE'
     }
   };
 }
@@ -191,6 +198,9 @@ export async function runFullProductionPipeline(conceptInputs) {
     console.warn(`[Pipeline] Production Analytics recording warning: ${analyticsErr.message}`);
   }
 
+  const isMcpConfigured = validateClickHouseConfig();
+  const totalDurationMs = baseResult.pipelineTelemetry.totalDurationMs + breakdownDurationMs + budgetDurationMs + scheduleDurationMs;
+
   return {
     ...baseResult,
     breakdown: breakdownOutput,
@@ -201,7 +211,11 @@ export async function runFullProductionPipeline(conceptInputs) {
       breakdownDurationMs,
       budgetDurationMs,
       scheduleDurationMs,
-      totalDurationMs: baseResult.pipelineTelemetry.totalDurationMs + breakdownDurationMs + budgetDurationMs + scheduleDurationMs
+      totalDurationMs,
+      durationMs: totalDurationMs,
+      status: 'SUCCESS',
+      mcpLogged: isMcpConfigured,
+      mcpStatus: isMcpConfigured ? 'CONNECTED / SYNCED' : 'DISABLED / UNAVAILABLE'
     }
   };
 }

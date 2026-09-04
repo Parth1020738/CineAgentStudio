@@ -25,237 +25,240 @@ export default function ProductionInsightsView({ insights, projectId }) {
 
   return (
     <div className="insights-workspace">
-      {/* ClickHouse Cloud MCP Status Banner */}
-      <div className="insights-status-strip">
-        <div className="status-left">
-          {insights.isDemoData ? (
-            <>
-              <span className="demo-dot" style={{ width: 8, height: 8, borderRadius: '50%', backgroundColor: '#f59e0b', display: 'inline-block', marginRight: 6 }}></span>
-              <span className="live-text">Production Analytics</span>
-              <span className="sync-badge demo-badge" style={{ backgroundColor: '#78350f', color: '#fef3c7', padding: '2px 8px', borderRadius: 4, fontWeight: 700, fontSize: '0.75rem' }}>LOCAL DEMO DATA</span>
-            </>
-          ) : (
-            <>
-              <span className="live-dot"></span>
-              <span className="live-text">ClickHouse Cloud Production Analytics</span>
-              <span className="sync-badge">Live Synced via MCP</span>
-            </>
-          )}
-        </div>
-        <div className="status-right">
-          <span className="project-tag">Project ID: {projectId}</span>
-        </div>
-      </div>
-
-      {/* High-Level Production KPI Summary */}
-      <div className="insights-kpi-grid">
-        <div className="insights-kpi-card">
-          <span className="ikpi-label">Target Budget</span>
-          <span className="ikpi-val">{formatCurrency(summary.target_budget)}</span>
-          <span className="ikpi-sub">Producer Cap</span>
-        </div>
-
-        <div className="insights-kpi-card">
-          <span className="ikpi-label">Estimated Total</span>
-          <span className="ikpi-val highlight-gold">{formatCurrency(summary.estimated_total)}</span>
-          <span className="ikpi-sub">Line-Item Total</span>
-        </div>
-
-        <div className="insights-kpi-card">
-          <span className="ikpi-label">Budget Variance</span>
-          <span className={`ikpi-val ${summary.target_variance < 0 ? 'text-green' : summary.target_variance > 0 ? 'text-red' : ''}`}>
-            {summary.target_variance > 0 ? '+' : ''}{formatCurrency(summary.target_variance)}
-          </span>
-          <span className="ikpi-sub">Status: {summary.budget_status || 'OK'}</span>
-        </div>
-
-        <div className="insights-kpi-card">
-          <span className="ikpi-label">Total Scenes</span>
-          <span className="ikpi-val">{summary.total_scenes || 0}</span>
-          <span className="ikpi-sub">Breakdown Count</span>
-        </div>
-
-        <div className="insights-kpi-card">
-          <span className="ikpi-label">Shooting Days</span>
-          <span className="ikpi-val">{summary.total_shoot_days || 0}</span>
-          <span className="ikpi-sub">Schedule Length</span>
-        </div>
-      </div>
-
-      {/* Analytics Perspectives Grid */}
-      <div className="insights-grid-2col">
-        {/* Top Cost Scenes */}
-        <div className="insights-panel">
-          <div className="panel-header">
-            <h4>🎬 Highest Cost Scenes</h4>
+      {/* 1. Header Card */}
+      <section className="card insights-header-card" aria-label="Production Insights Header">
+        <div className="insights-header-top">
+          <div>
+            <h2 className="insights-title">PRODUCTION INSIGHTS</h2>
+            <p className="section-subtitle">
+              Production intelligence powered by ClickHouse Cloud via MCP.
+            </p>
           </div>
-          <div className="panel-body">
-            {highestCostScenes.length === 0 ? (
-              <p className="muted-text">No cost breakdown data available.</p>
+          <div className="insights-status-strip">
+            {insights.isDemoData ? (
+              <>
+                <span className="demo-dot"></span>
+                <span className="live-text">Production Analytics</span>
+                <span className="sync-badge demo-badge">LOCAL DEMO DATA</span>
+              </>
             ) : (
-              <table className="insights-table">
-                <thead>
-                  <tr>
-                    <th>Scene #</th>
-                    <th>Heading</th>
-                    <th>Location</th>
-                    <th>Cost</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {highestCostScenes.map((sc, idx) => (
-                    <tr key={idx}>
-                      <td><strong>Scene {sc.scene_id || sc.scene_number}</strong></td>
-                      <td>{sc.scene_heading}</td>
-                      <td>{sc.location}</td>
-                      <td className="text-gold"><strong>{formatCurrency(sc.estimated_cost)}</strong></td>
+              <>
+                <span className="live-dot"></span>
+                <span className="live-text">ClickHouse Cloud Production Analytics</span>
+                <span className="sync-badge">Live Synced via MCP</span>
+              </>
+            )}
+            <span className="project-tag">Project ID: {projectId}</span>
+          </div>
+        </div>
+      </section>
+
+      {/* 2. Project Summary KPIs Section */}
+      <section className="insights-section" aria-label="Project Summary">
+        <h3 className="insights-section-title">PROJECT SUMMARY</h3>
+        <div className="insights-kpi-grid">
+          <div className="insights-kpi-card">
+            <span className="ikpi-label">ESTIMATED COST</span>
+            <span className="ikpi-val highlight-gold">{formatCurrency(summary.estimated_total)}</span>
+            <span className="ikpi-sub">Total Line-Item Forecast</span>
+          </div>
+
+          <div className="insights-kpi-card">
+            <span className="ikpi-label">TARGET BUDGET</span>
+            <span className="ikpi-val">{formatCurrency(summary.target_budget)}</span>
+            <span className="ikpi-sub">Producer Budget Cap</span>
+          </div>
+
+          <div className="insights-kpi-card">
+            <span className="ikpi-label">BUDGET VARIANCE</span>
+            <span className={`ikpi-val ${summary.target_variance < 0 ? 'text-green' : summary.target_variance > 0 ? 'text-red' : ''}`}>
+              {summary.target_variance > 0 ? '+' : ''}{formatCurrency(summary.target_variance)}
+            </span>
+            <span className="ikpi-sub">Status: {summary.budget_status || 'OK'}</span>
+          </div>
+
+          <div className="insights-kpi-card">
+            <span className="ikpi-label">TOTAL SCENES</span>
+            <span className="ikpi-val">{summary.total_scenes || 0} Scenes</span>
+            <span className="ikpi-sub">Breakdown Total</span>
+          </div>
+
+          <div className="insights-kpi-card">
+            <span className="ikpi-label">SHOOT DAYS</span>
+            <span className="ikpi-val text-blue">{summary.total_shoot_days || 0} Days</span>
+            <span className="ikpi-sub">Shooting Schedule Length</span>
+          </div>
+        </div>
+      </section>
+
+      {/* 3. Cost Analysis Section */}
+      <section className="insights-section" aria-label="Cost Analysis">
+        <h3 className="insights-section-title">COST ANALYSIS</h3>
+        <div className="insights-grid-2col">
+          {/* Card A: Highest-Cost Scenes */}
+          <div className="card insights-panel" aria-label="Highest-Cost Scenes">
+            <div className="panel-header">
+              <h4>🎬 Highest-Cost Scenes</h4>
+              <p className="panel-subtitle">Scenes generating highest asset and production expenditure.</p>
+            </div>
+            <div className="panel-body">
+              {highestCostScenes.length === 0 ? (
+                <p className="muted-text">No scene cost breakdown data available.</p>
+              ) : (
+                <table className="insights-table">
+                  <thead>
+                    <tr>
+                      <th>Scene #</th>
+                      <th>Heading</th>
+                      <th>Location</th>
+                      <th>Cost</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
+                  </thead>
+                  <tbody>
+                    {highestCostScenes.map((sc, idx) => (
+                      <tr key={idx}>
+                        <td><strong>Scene {sc.scene_id || sc.scene_number}</strong></td>
+                        <td>{sc.scene_heading}</td>
+                        <td>{sc.location}</td>
+                        <td className="text-gold"><strong>{formatCurrency(sc.estimated_cost)}</strong></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
           </div>
-        </div>
 
-        {/* Cost by Location */}
-        <div className="insights-panel">
-          <div className="panel-header">
-            <h4>📍 Cost Distribution by Location</h4>
-          </div>
-          <div className="panel-body">
-            {costByLocation.length === 0 ? (
-              <p className="muted-text">No location metric data available.</p>
-            ) : (
-              <table className="insights-table">
-                <thead>
-                  <tr>
-                    <th>Location</th>
-                    <th>Scenes</th>
-                    <th>Total Cost</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {costByLocation.map((loc, idx) => (
-                    <tr key={idx}>
-                      <td><strong>{loc.location}</strong></td>
-                      <td>{loc.scene_count}</td>
-                      <td className="text-gold">{formatCurrency(loc.total_cost)}</td>
+          {/* Card B: Cost by Location */}
+          <div className="card insights-panel" aria-label="Cost by Location">
+            <div className="panel-header">
+              <h4>📍 Cost by Location</h4>
+              <p className="panel-subtitle">Aggregated production expenditure grouped by location.</p>
+            </div>
+            <div className="panel-body">
+              {costByLocation.length === 0 ? (
+                <p className="muted-text">No location cost data available.</p>
+              ) : (
+                <table className="insights-table">
+                  <thead>
+                    <tr>
+                      <th>Location</th>
+                      <th>Scenes</th>
+                      <th>Total Cost</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
+                  </thead>
+                  <tbody>
+                    {costByLocation.map((loc, idx) => (
+                      <tr key={idx}>
+                        <td><strong>{loc.location}</strong></td>
+                        <td>{loc.scene_count}</td>
+                        <td className="text-gold"><strong>{formatCurrency(loc.total_cost)}</strong></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
           </div>
         </div>
+      </section>
 
-        {/* Department Budget Breakdown */}
-        <div className="insights-panel">
-          <div className="panel-header">
-            <h4>💰 Category Allocation Breakdown</h4>
+      {/* 4. Production Complexity Section */}
+      <section className="insights-section" aria-label="Production Complexity">
+        <h3 className="insights-section-title">PRODUCTION COMPLEXITY</h3>
+        <div className="insights-grid-2col">
+          {/* Card A: Complexity Distribution */}
+          <div className="card insights-panel" aria-label="Complexity Distribution">
+            <div className="panel-header">
+              <h4>⚡ Complexity Distribution</h4>
+              <p className="panel-subtitle">Technical scene complexity classification (HIGH / MEDIUM / LOW).</p>
+            </div>
+            <div className="panel-body">
+              {complexityDist.length === 0 ? (
+                <p className="muted-text">No complexity distribution data available.</p>
+              ) : (
+                <div className="complexity-badge-list">
+                  {complexityDist.map((comp, idx) => (
+                    <div key={idx} className={`complexity-card complexity-${String(comp.production_complexity).toLowerCase()}`}>
+                      <div className="comp-top">
+                        <span className="comp-tag">{comp.production_complexity}</span>
+                        <span className="comp-count">{comp.scene_count} Scene(s)</span>
+                      </div>
+                      <span className="comp-cost">{formatCurrency(comp.total_cost)}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
-          <div className="panel-body">
-            {costByCategory.length === 0 ? (
-              <p className="muted-text">No category data available.</p>
-            ) : (
-              <table className="insights-table">
-                <thead>
-                  <tr>
-                    <th>Category</th>
-                    <th>Amount</th>
-                    <th>% of Total</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {costByCategory.map((cat, idx) => (
-                    <tr key={idx}>
-                      <td><strong>{cat.category}</strong></td>
-                      <td>{formatCurrency(cat.total_cost)}</td>
-                      <td>{cat.pct_of_budget ? `${cat.pct_of_budget}%` : '-'}</td>
+
+          {/* Card B: Cast & Extras Load */}
+          <div className="card insights-panel" aria-label="Cast & Extras Load">
+            <div className="panel-header">
+              <h4>👥 Cast & Extras Load</h4>
+              <p className="panel-subtitle">Scene-level talent allocation and actor roster load.</p>
+            </div>
+            <div className="panel-body">
+              {castLoad.length === 0 ? (
+                <p className="muted-text">No cast load data available.</p>
+              ) : (
+                <table className="insights-table">
+                  <thead>
+                    <tr>
+                      <th>Scene #</th>
+                      <th>Location</th>
+                      <th>Cast Load</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
+                  </thead>
+                  <tbody>
+                    {castLoad.map((cl, idx) => (
+                      <tr key={idx}>
+                        <td><strong>Scene {cl.scene_id || cl.scene_number}</strong></td>
+                        <td>{cl.location}</td>
+                        <td><span className="badge-pill">{cl.cast_count} Actor(s)</span></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
           </div>
         </div>
+      </section>
 
-        {/* Production Complexity Breakdown */}
-        <div className="insights-panel">
+      {/* 5. Major Cost Drivers Section */}
+      <section className="insights-section" aria-label="Major Cost Drivers">
+        <div className="card insights-panel full-width-card" aria-label="Major Cost Drivers Card">
           <div className="panel-header">
-            <h4>⚡ Scene Complexity Distribution</h4>
-          </div>
-          <div className="panel-body">
-            {complexityDist.length === 0 ? (
-              <p className="muted-text">No complexity metric data available.</p>
-            ) : (
-              <div className="complexity-badge-list">
-                {complexityDist.map((comp, idx) => (
-                  <div key={idx} className={`complexity-card complexity-${String(comp.production_complexity).toLowerCase()}`}>
-                    <span className="comp-tag">{comp.production_complexity}</span>
-                    <span className="comp-count">{comp.scene_count} Scene(s)</span>
-                    <span className="comp-cost">{formatCurrency(comp.total_cost)}</span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* Cast Load per Scene */}
-        <div className="insights-panel">
-          <div className="panel-header">
-            <h4>👥 Cast Load per Scene</h4>
-          </div>
-          <div className="panel-body">
-            {castLoad.length === 0 ? (
-              <p className="muted-text">No cast load data available.</p>
-            ) : (
-              <table className="insights-table">
-                <thead>
-                  <tr>
-                    <th>Scene #</th>
-                    <th>Location</th>
-                    <th>Cast Count</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {castLoad.map((cl, idx) => (
-                    <tr key={idx}>
-                      <td><strong>Scene {cl.scene_id || cl.scene_number}</strong></td>
-                      <td>{cl.location}</td>
-                      <td><span className="badge-pill">{cl.cast_count} Actor(s)</span></td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </div>
-        </div>
-
-        {/* Major Cost Drivers */}
-        <div className="insights-panel">
-          <div className="panel-header">
-            <h4>⚠️ Key Production Cost Drivers</h4>
+            <h4>⚠️ MAJOR COST DRIVERS</h4>
+            <p className="panel-subtitle">Primary production cost drivers identified by ClickHouse Cloud analytics.</p>
           </div>
           <div className="panel-body">
             {majorDrivers.length === 0 ? (
               <p className="muted-text">No major cost driver records found.</p>
             ) : (
-              <div className="cost-drivers-list">
-                {majorDrivers.map((driver, idx) => (
-                  <div key={idx} className="driver-item">
-                    <div className="driver-header">
-                      <span className="driver-factor">{driver.factor}</span>
-                      <span className="driver-impact">+{formatCurrency(driver.impact)}</span>
-                    </div>
-                    {driver.explanation && <p className="driver-explanation">{driver.explanation}</p>}
-                  </div>
-                ))}
-              </div>
+              <table className="insights-table cost-drivers-table">
+                <thead>
+                  <tr>
+                    <th style={{ width: '25%' }}>Factor</th>
+                    <th style={{ width: '20%' }}>Impact</th>
+                    <th style={{ width: '55%' }}>Explanation</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {majorDrivers.map((driver, idx) => (
+                    <tr key={idx}>
+                      <td><strong>{driver.factor}</strong></td>
+                      <td className="text-red"><strong>+{formatCurrency(driver.impact)}</strong></td>
+                      <td>{driver.explanation || '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             )}
           </div>
         </div>
-      </div>
+      </section>
     </div>
   );
 }

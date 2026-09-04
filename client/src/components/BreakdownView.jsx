@@ -13,6 +13,17 @@ export default function BreakdownView({ breakdown }) {
 
   const scenes = breakdown.scenes || [];
 
+  const highCostCount = scenes.filter(s => (s.estimated_cost || 0) >= 30000).length;
+  const highComplexityCount = scenes.filter(s => s.complexity === 'HIGH').length;
+  const locationsList = Array.from(new Set(scenes.map(s => s.location).filter(Boolean)));
+  const castList = Array.from(new Set(scenes.flatMap(s => s.cast || [])));
+  const totalElementsCount = scenes.reduce((acc, s) => {
+    const propsCount = (s.props || []).length;
+    const vfxCount = (s.vfx || []).length;
+    const eqCount = (s.special_equipment || []).length;
+    return acc + propsCount + vfxCount + eqCount;
+  }, 0);
+
   const filteredScenes = scenes.filter((scene) => {
     if (filter === 'HIGH_COST') {
       return (scene.estimated_cost || 0) >= 30000;
@@ -36,6 +47,34 @@ export default function BreakdownView({ breakdown }) {
 
   return (
     <div className="breakdown-workspace">
+      {/* Summary Highlights */}
+      <div className="breakdown-summary-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '16px', marginBottom: '24px' }}>
+        <div style={{ backgroundColor: '#1f2937', padding: '16px', borderRadius: '8px', border: '1px solid #374151' }}>
+          <span style={{ fontSize: '12px', color: '#9ca3af', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Scenes</span>
+          <div style={{ fontSize: '24px', fontWeight: '800', color: '#f3f4f6', marginTop: '4px' }}>{scenes.length}</div>
+        </div>
+        <div style={{ backgroundColor: '#1f2937', padding: '16px', borderRadius: '8px', border: '1px solid #374151' }}>
+          <span style={{ fontSize: '12px', color: '#9ca3af', textTransform: 'uppercase', letterSpacing: '0.05em' }}>High Cost Scenes</span>
+          <div style={{ fontSize: '24px', fontWeight: '800', color: '#ef4444', marginTop: '4px' }}>{highCostCount}</div>
+        </div>
+        <div style={{ backgroundColor: '#1f2937', padding: '16px', borderRadius: '8px', border: '1px solid #374151' }}>
+          <span style={{ fontSize: '12px', color: '#9ca3af', textTransform: 'uppercase', letterSpacing: '0.05em' }}>High Complexity</span>
+          <div style={{ fontSize: '24px', fontWeight: '800', color: '#fbbf24', marginTop: '4px' }}>{highComplexityCount}</div>
+        </div>
+        <div style={{ backgroundColor: '#1f2937', padding: '16px', borderRadius: '8px', border: '1px solid #374151' }}>
+          <span style={{ fontSize: '12px', color: '#9ca3af', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Locations</span>
+          <div style={{ fontSize: '24px', fontWeight: '800', color: '#60a5fa', marginTop: '4px' }}>{locationsList.length}</div>
+        </div>
+        <div style={{ backgroundColor: '#1f2937', padding: '16px', borderRadius: '8px', border: '1px solid #374151' }}>
+          <span style={{ fontSize: '12px', color: '#9ca3af', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Cast Members</span>
+          <div style={{ fontSize: '24px', fontWeight: '800', color: '#10b981', marginTop: '4px' }}>{castList.length}</div>
+        </div>
+        <div style={{ backgroundColor: '#1f2937', padding: '16px', borderRadius: '8px', border: '1px solid #374151' }}>
+          <span style={{ fontSize: '12px', color: '#9ca3af', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Production Elements</span>
+          <div style={{ fontSize: '24px', fontWeight: '800', color: '#e5b869', marginTop: '4px' }}>{totalElementsCount}</div>
+        </div>
+      </div>
+
       {/* Header & Filter Controls */}
       <div className="breakdown-header-bar">
         <div>
