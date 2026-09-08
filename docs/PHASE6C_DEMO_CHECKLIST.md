@@ -44,7 +44,7 @@ Prepare screenshots or video recordings of the following 9 key screens for backu
 3. **Screenplay View** (`Courier Prime` industry-formatted script).
 4. **Production Breakdown Matrix** (Scene elements, props, VFX, complexity).
 5. **Budget Reconciliation View** (Category costs, variance, major cost drivers).
-6. **Shooting Schedule View** (5-day shooting schedule, location moves).
+6. **Shooting Schedule View** (12-day shooting schedule, location moves).
 7. **ClickHouse Insights Workspace** (Real-time cost & cast load telemetry graphs).
 8. **Export Workspace** (Production Bible CTA & export cards).
 9. **Downloaded Archive Verification** (Extracted Production Bible ZIP contents).

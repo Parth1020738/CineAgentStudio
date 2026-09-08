@@ -37,7 +37,7 @@ This document details the production environment verification, readiness checks,
 To protect against unexpected LLM availability or network fluctuations during recording:
 
 - **Tier 1 (Primary Live Execution)**:
-  - Perform a live generation of *The Last Monsoon* ($2.5M budget, 5 shoot days) through the production web UI.
+  - Perform a live generation of *The Last Monsoon* ($5.0M budget, 12 shoot days) through the production web UI.
 - **Tier 2 (Pre-Generated Real Payload)**:
   - If Gemini API experiences a temporary rate limit spike during recording, load the pre-generated real production plan payload for *The Last Monsoon*.
 - **Tier 3 (Offline Demo Backup)**:
